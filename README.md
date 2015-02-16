@@ -1,13 +1,31 @@
 Microcontroller Interconnect Protocol version 1.0.
 
-This MIN repository ncludes the specification, a standard C API and
+This MIN repository includes the specification, a standard C API and
 reference implementations for C and Python. See the Wiki for further
 details:
 
 http://github.com/min-protocol/min/wiki
 
-All software and documentation included in this repository is made
-available under the terms of the MIT License:
+File structure:
+
+firmware/			Embedded C code
+	min/			
+		layer1.c	MIN 1.0 reference implementation
+		min.h		API definition
+	main.c			Test program
+	serial.h		Serial handler for ATmega640 USART
+	serial.c
+	layer2.h		Application layer for example program
+	layer2.c
+	main.c			Example program
+		
+host/				Python code
+	min.py			MIN 1.0 reference implementation
+				(in Frame and SerialHandler classes)
+				Example program
+	requirements.txt	pip freeze file
+
+All software and documentation available under the terms of the MIT License:
 
 The MIT License (MIT)
 
