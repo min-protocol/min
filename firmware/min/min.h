@@ -1,33 +1,32 @@
 /*
- * min.h
- *
- *  Created on: May 3, 2014
- *      Author: ken
+ * Microcontroller Interconnect Network (MIN) Version 1.0
+ * 
+ * Layer 1 C API.
+ * 
+ * Author: Ken Tindell
+ * Copyright (c) 2014-2015 JK Energy Ltd.
+ * Licensed under MIT License.
  */
-
 #ifndef MIN_H_
 #define MIN_H_
 
 #include <stdint.h>
 
-/*
- * Microcontroller Interconnect Network (MIN) Version 1.0
- * 
- * Reference implementation
- */
-
 #define MAX_FRAME_PAYLOAD_SIZE		(15U)
 
-/* Transmit a MIN Layer 1 frame */
+/* Initialise Layer 1 */
+void min_init_layer1(void);
+
+/* Called by Layer 2 to transmit a MIN Layer 1 frame */
 void min_tx_frame(uint8_t id, uint8_t payload[], uint8_t control);			
 
-/* Called by UART handler when a byte is received */
+/* Called by Layer 2 when a byte is received from its UART handler */
 void min_rx_byte(uint8_t byte);
 
-/* Callback; ask application to queue a byte for given frame into its UART driver */
+/* Callback; ask Layer 2 to queue a byte into its UART handler */
 void min_tx_byte(uint8_t byte);										
 
-/* Callback; indicate to application that a valid frame received */
+/* Callback; indicate to Layer 2 that a valid frame has been received */
 void min_frame_received(uint8_t buf[], uint8_t control, uint8_t id);		
 
 #endif /* MIN_H_ */

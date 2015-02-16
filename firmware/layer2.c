@@ -1,24 +1,23 @@
-/*
- * messages.c
- * 
- * Application layer (MIN layer 3)
+/* 
+ * Application layer (MIN layer 2)
  * 
  * Application-specific handling of data to and from the host.
- *
- * Created: 17/05/2014 13:41:28
- *  Author: ken_000
+ * 
+ * Author: Ken Tindell
+ * Copyright (c) 2014-2015 JK Energy Ltd.
+ * Licensed under MIT License.
  */ 
 
-#include "main.h"
-#include "usart.h"
+#include "serial.h"
 #include "min/min.h"
-#include "messages.h"
+#include "layer2.h"
 
 /* Worker functions to write words into a buffer in big endian format 
  * using generic C
  * 
  * A good C compiler will spot what is going on and use byte manipulation
- * instructions to get the right effect
+ * instructions to get the right effect (functions declared static
+ * to hint to compiler that code can be inlined)
  */
 static void encode_32(uint32_t data, uint8_t buf[])
 {
@@ -54,9 +53,7 @@ static uint16_t decode_16(uint8_t buf[])
 
 /* Macros for unpacking and packing MIN frames in various functions.
  *
- * TODO: put in place checking code to make sure no buffer overrun.
- *
- * Declaring stuff in macros like this is not nice like this but it cuts down
+ * Declaring stuff in macros like this is not pretty but it cuts down
  * on obscure errors due to typos.
  */
 #define DECLARE_BUF(size)		uint8_t m_buf[(size)]; uint8_t m_control = (size); uint8_t m_cursor = 0
@@ -105,17 +102,6 @@ void report_deadbeef(uint32_t deadbeef)
 }
 
 /* Functions to unpack incoming MIN frames into application-specific data.
- *
- * All declared with this prototype:
- *
- * static void f(uint8_t m_id, uint8_t m_buf[], uint8_t m_control)
- *
- * All are static because are never called from outside the message handler.
- *
- * All begin with:
- *
- * DECLARE_UNPACK()
- * 
  */
 
 /* Example of how a MIN frame send from the host would be used to issue
@@ -124,6 +110,11 @@ void report_deadbeef(uint32_t deadbeef)
  * The motor_requested flag could be polled to know when to pick up the
  * position/speed setting for the motor.
  */
+
+uint32_t motor_position_request;
+uint16_t motor_speed_request;
+uint8_t motor_requested;
+
 static void do_motor(uint8_t m_id, uint8_t m_buf[], uint8_t m_control)
 {
 	DECLARE_UNPACK();
@@ -144,18 +135,17 @@ static void do_ping(uint8_t m_id, uint8_t m_buf[], uint8_t m_control)
 }
 
 /* Main function to process incoming bytes and pass them into MIN layer */
-void do_incoming_messages(void)
+void poll_rx_bytes(void)
 {	
 	/* Handle all the outstanding characters in the input buffer */
-	while(UART_RECEIVE_READY()) {
+	while(uart_receive_ready()) {
 		uint8_t byte;
-		RECEIVE_UART(&byte, 1U);
+		uart_receive(&byte, 1U);
 		min_rx_byte(byte);
 	}
 }
 
-/* Callback from MIN to indicate the frame has been received; this is application-specific switch on MIN ID
- * to handle the frame.
+/* Callback from MIN layer 1 to indicate the frame has been received
  */
 void min_frame_received(uint8_t buf[], uint8_t control, uint8_t id)
 {	
@@ -179,17 +169,18 @@ void min_tx_byte(uint8_t byte)
 	/* Ignore FIFO overrun issue - don't send frames faster than the FIFO can handle them
 	 * (and make sure the FIFO is big enough to take a maximum-sized MIN frame).
 	 */
-	SEND_UART(&byte, 1U);
+	uart_send(&byte, 1U);
 }
 
 /* Callback from MIN to see how much transmit buffer space there is */
 uint8_t min_tx_space(void)
 {
-	return UART_SEND_SPACE();
+	return uart_send_space();
 }
 
-void init_messages(void)
+void init_min(void)
 {
 	/* Set MIN Layer 0 settings of 8 data bits, 1 stop bit, no parity */
-	init_uart(UART_BAUD_57600, 8, 1, UART_PARITY_NONE);
+	init_uart(MIN_BAUD, 8, 1, UART_PARITY_NONE);
+    min_init_layer1();
 }

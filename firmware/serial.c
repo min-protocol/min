@@ -1,22 +1,88 @@
 /*
- * usart.c
- *
- * Created: 28/04/2014 16:13:57
- *  Author: ken_000
+ * Serial drivers for ATmega640 family, with software FIFOs for
+ * receive and transmit.
+ * 
+ *  Author: Ken Tindell
+ * Copyright (c) 2014-2015 JK Energy Ltd.
+ * Licensed under MIT License.
  */ 
 
-#include "main.h"
+#include "serial.h"
 
-/* Define FIFOs for receive and transmit */
-#define TX_FIFO_MAXSIZE                 (70U)           /* Must be >= 33 bytes */
-#define RX_FIFO_MAXSIZE                 (40U)
+/* Sending process:
+ * - A FIFO for sending
+ * - "Character sent" interrupt reads a character from the FIFO (if there
+ *   is one) and puts it in the UART data buffer
+ * - Application layer writes to the FIFO; if it was empty it triggers the
+ *   "sent" interrupt (or writes directly to the UART)
+ *
+ * Receiving process:
+ * - A FIFO for receiving
+ * - A "character received" interrupt reads the UART buffer and writes to
+ *   the FIFO (writes to full are ignored and character discarded)
+ * - Application layer polls the FIFO to see if there are enough characters
+ *   to process
+ */ 
 
-struct fifo tx_fifo;
-struct fifo rx_fifo;
+struct fifo {
+	uint8_t *buf;		/* Space allocated to FIFO */
+	uint8_t size;		/* Size of FIFO */
+	uint8_t head;		/* Indexes first free byte (unless full) */
+	uint8_t tail;		/* Indexes last filled byte (unless empty) */
+	uint8_t used;		/* Between 0..size */
+	uint8_t max_used;	/* Maximum space used in the FIFO */
+};
 
-uint8_t tx_buf[TX_FIFO_MAXSIZE];
-uint8_t rx_buf[RX_FIFO_MAXSIZE];
+#define FIFO_EMPTY(f)	((f)->used == 0)
+#define FIFO_FULL(f)	((f)->used == (f)->size)
+#define FIFO_USED(f)	((f)->used)
 
+static void fifo_init(struct fifo *f, uint8_t buf[], uint8_t size)
+{
+	f->used = 0;
+	f->head = f->tail = 0;
+	f->buf = buf;
+	f->size = size;	
+	f->max_used = 0;
+}
+
+static void fifo_write(struct fifo *f, uint8_t b)
+{
+	if(!FIFO_FULL(f)) {						/* Only proceed if there's space */
+		f->used++;							/* Keep track of the number of used bytes in the FIFO */
+		f->buf[f->head++] = b;				/* Add to where head indexes */
+		if(f->head == f->size) {			/* If head goes off the end of the FIFO buffer then wrap it */
+			f->head = 0;
+		}	
+	}
+	if(f->used > f->max_used) {				/* For diagnostics keep a high-water mark of used space */
+		f->max_used = f->used;
+	}
+}
+
+static uint8_t fifo_read(struct fifo *f)
+{
+	uint8_t ret = 0;
+	
+	if(!FIFO_EMPTY(f)) {					/* Only proceed if there's something there */
+		f->used--;							/* Keep track of the used space */
+		ret = f->buf[f->tail++];
+		if(f->tail == f->size) {			/* Wrap tail around if it goes off the end of the buffer */
+			f->tail = 0;
+		}
+	}
+	
+	return ret;
+}
+
+static struct fifo tx_fifo;
+static struct fifo rx_fifo;
+
+static uint8_t tx_buf[TX_FIFO_MAXSIZE];
+static uint8_t rx_buf[RX_FIFO_MAXSIZE];
+
+#define LOCK_INTERRUPTS(i)		    		{(i) = SREG; cli();}			/* NB: SIDE-EFFECT MACRO! */
+#define UNLOCK_INTERRUPTS(i)				{SREG = i;}
 
 /* Offsets from USARTn base for each register */
 #define UCSRnA(u)							(*((u)+0U))
@@ -57,10 +123,7 @@ uint8_t rx_buf[RX_FIFO_MAXSIZE];
 #define UCSZn0								(1)
 #define UCPOLn								(0)
 
-/* UART0; check hardware for specific ports required */
-#define UART                                ((volatile uint8_t *)(0x00c0U))
-
-/* Main setup of USART
+/* Main setup of ATmega640 USART
  *
  * Hardwired to asynchronous and not using clock doubler so will do 16 samples on receive (better for noise tolerance).
  * The baud parameter will be written straight into the baud rate register.
@@ -119,7 +182,7 @@ void init_uart(uint16_t baud, uint8_t stop_bits, uint8_t data_bits, uint8_t pari
 
 /* Handle interrupt generated when the transmit buffer is free to write to.
  */
-void uart_isend(void)
+static void uart_isend(void)
 {
 	uint8_t used = tx_fifo.used;
 	/* Called when the transmit buffer can be filled */
@@ -148,7 +211,7 @@ void uart_isend(void)
  *
  * The CPU must handle the received bytes as fast as they come in (on average): there is no flow control.
  */
-void uart_ireceive(void)
+static void uart_ireceive(void)
 {	
 	uint8_t byte;
 	/* TODO handle the error flags (DORn should be logged - it indicates the interrupt handling isn't fast enough; parity error frames should be discarded) */
@@ -224,18 +287,6 @@ uint8_t uart_send_space(void)
 	return ret;
 }
 
-uint8_t uart_receive_space(void)
-{
-	uint8_t tmp;
-	uint8_t ret;
-	
-	LOCK_INTERRUPTS(tmp);
-	ret = rx_fifo.size - rx_fifo.used;
-	UNLOCK_INTERRUPTS(tmp);
-	
-	return ret;
-}
-
 uint8_t uart_receive_ready(void)
 {
 	uint8_t tmp;
@@ -248,12 +299,12 @@ uint8_t uart_receive_ready(void)
 	return ret;	
 }
 
-ISR(USART0_RX_vect)
+ISR(UART_RX_VECT)
 {
 	uart_ireceive();
 }
 
-ISR(USART0_UDRE_vect)
+ISR(UART_TX_VECT)
 {
 	uart_isend();
 }
