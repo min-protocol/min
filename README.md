@@ -1,4 +1,4 @@
-## Microcontroller Interconnect Protocol version 1.0.
+## Microcontroller Interconnect Protocol version 1.0
 
 This MIN repository includes the specification, a standard C API and
 reference implementations for C and Python. See the Wiki for further
