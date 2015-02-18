@@ -30,7 +30,7 @@
  *
  * The UART is set up for interrupt handling on transmit and receive.
  */
-void init_uart(uint16_t baud, uint8_t stop_bits, uint8_t data_bits, uint8_t parity);
+void init_uart(uint16_t baud);
 
 /* Select FIFO buffer sizes */
 #define TX_FIFO_MAXSIZE             (70U)
@@ -41,10 +41,6 @@ uint8_t uart_receive(uint8_t *dest, uint8_t n);     /* Take n bytes from receive
 uint8_t uart_send(uint8_t *src, uint8_t n);         /* Push n bytes into transmit FIFO */
 uint8_t uart_send_space(void);                      /* Return how much space left in transmit FIFO */
 uint8_t uart_receive_ready(void);                   /* Returns true if receive FIFO not empty */
-
-#define UART_PARITY_NONE			(0)
-#define UART_PARITY_ODD				(1U)
-#define UART_PARITY_EVEN			(2U)
 
 #define UART_BAUD_9600				((F_OSC_HZ / (16UL * 9600UL)) - 1UL)
 #define UART_BAUD_115200 			((F_OSC_HZ / (16UL * 115200UL)) - 1UL)		/* Quite high error on this baud rate */

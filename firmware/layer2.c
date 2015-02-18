@@ -181,6 +181,6 @@ uint8_t min_tx_space(void)
 void init_min(void)
 {
 	/* Set MIN Layer 0 settings of 8 data bits, 1 stop bit, no parity */
-	init_uart(MIN_BAUD, 8, 1, UART_PARITY_NONE);
+	init_uart(MIN_BAUD);
     min_init_layer1();
 }

@@ -1,7 +1,6 @@
 import queue
 import serial
 import threading
-from colorama import *
 import time
 import argparse
 import msvcrt           # Windows-only; on Linux use getch: https://pypi.python.org/pypi/getch
@@ -77,10 +76,9 @@ class Frame:
         self.handler.send_queue.put(self.get_bytes())
 
     def __str__(self):
-        s = Fore.BLUE
-        s += "ID: 0x{0:02x}\n".format(self.frame_id)
-        s += "Payload: {0}\n".format(' '.join('0x{:02x}'.format(i) for i in self.payload))
-        s += Fore.RESET
+        s = "ID: 0x{0:02x}\n".format(self.frame_id)
+        s += "Payload: {0}\n".format(':'.join('{:02x}'.format(i) for i in self.payload))
+
         return s
 
     def get_control(self):
@@ -146,7 +144,13 @@ class SerialHandler:
         self.payload_bytes_to_go = 0
         self.frame = None
         self.state = self.SOF
-        self.serial = serial.Serial(port=port, baudrate=baudrate, timeout=None)
+        self.serial = serial.Serial(port=port,
+                                    baudrate=baudrate,
+                                    timeout=None,
+                                    parity=serial.PARITY_NONE,
+                                    stopbits=serial.STOPBITS_ONE,
+                                    bytesize=serial.EIGHTBITS)
+
         self.received_frame_handler = received_frame_handler
 
         # Initialize receiver and sender threads
@@ -191,19 +195,19 @@ class SerialHandler:
             if byte == Frame.HEADER_BYTE:
                 # If three header bytes in a row, reset state machine and start reading a new frame
                 if args.show_raw:
-                    print(Fore.RED + "Header seen" + Fore.RESET)
+                    print("Header seen")
                 self.state = SerialHandler.ID
                 return
             # Two in a row: we should see a stuff byte
             if byte != Frame.STUFF_BYTE:
                 # Something has gone wrong with the frame, discard and reset
-                print("\t" + Fore.WHITE + Back.RED + "Framing error: Missing stuff byte" + Style.RESET_ALL)
+                print("Framing error: Missing stuff byte")
                 self.state = SerialHandler.SOF
                 return
             else:
                 # A stuff byte, discard and carry on receiving on the next byte where we were
                 if args.show_raw:
-                    print(Fore.GREEN + "Stuff byte discarded" + Fore.RESET)
+                    print("Stuff byte discarded")
                 return
 
         if byte == Frame.HEADER_BYTE:
@@ -253,14 +257,14 @@ class SerialHandler:
             checksum_bytes = self.frame.checksum()
             if checksum_bytes != self.frame_checksum_bytes:
                 # Checksum failure, drop it and look for a new one
-                print("\t" + Fore.WHITE + Back.RED + "FAILED CHECKSUM" + Style.RESET_ALL)
+                print("FAILED CHECKSUM")
                 self.state = SerialHandler.SOF
             else:
                 self.state = SerialHandler.EOF
         elif self.state == SerialHandler.EOF:
             if byte == Frame.EOF_BYTE:
                 if args.show_raw:
-                    print(Fore.GREEN + "\tEOF, frame passed up" + Fore.RESET)
+                    print("EOF, frame passed up")
                     print(self.frame)
                 # Frame is well-formed,pass it up for handling
                 self.received_frame_handler(frame=self.frame)
@@ -297,17 +301,17 @@ def received_frame(frame):
         pass
     else:
         if message_id == 0x0e:      # Deadbeef message
-            print(Fore.MAGENTA + "RX deadbeef: " + ':'.join('0x{:02x}'.format(i) for i in data) + Fore.RESET)
-        elif id == 0x23:            # Environment message
+            print("RX deadbeef: " + ':'.join('{:02x}'.format(i) for i in data))
+        elif message_id == 0x23:            # Environment message
             temperature = -20.0 + (min_decode(data[0:2]) * 0.0625)
             humidity = min_decode(data[2:4]) * 0.64
-            print("Environment: temperature={0}C, humidity={1}%\n".format(temperature, humidity))
-        elif id == 0x24:            # Motor status message
+            print("Environment: temperature={0}C, humidity={1}%".format(temperature, humidity))
+        elif message_id == 0x24:            # Motor status message
             status = data[0]
             position = min_decode(data[1:5])
-            print("Motor: status={}, position={}\n".format(status, position))
-        elif id == 0x02:
-            print("Ping received: " + ':'.join('0x{:02x}'.format(i) for i in data))
+            print("Motor: status={}, position={}".format(status, position))
+        elif message_id == 0x02:
+            print("Ping received: " + ':'.join('{:02x}'.format(i) for i in data))
 
 
 # Interactive menu to send frames on a keypress
@@ -318,10 +322,8 @@ def interactive_controller():
 
     while True:
         ch = msvcrt.getch()
-        print(ch)
         if ch == b'p':
             f = Frame(controller, frame_id=0x02, payload=[0xca, 0xfe, 0xf0, 0x0d])
-            print(f)
             f.transmit()
             print("Ping frame queued")
         elif ch == b'm':
@@ -335,9 +337,9 @@ def interactive_controller():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="MIN controller")
 
-    parser.add_argument('-p', dest='port', type=str, help="Serial port, e.g. COM3")
+    parser.add_argument('-p', dest='port', default="COM4", type=str, help="Serial port, e.g. COM3")
     parser.add_argument('-listen_only', action='store_true')
-    parser.add_argument('-baud', default=57600, type=int)
+    parser.add_argument('-baud', default=9600, type=int)
     parser.add_argument('-show_raw', action='store_true')
     parser.add_argument('-quiet', action='store_true')
 
@@ -345,7 +347,7 @@ if __name__ == '__main__':
     controller = SerialHandler(port=args.port, baudrate=args.baud, received_frame_handler=received_frame)
 
     if args.listen_only:
-        print(Fore.BLUE + "Listening only" + Fore.RESET)
+        print("Listening only")
     else:
         interactive_controller()
 
