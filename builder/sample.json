@@ -1,0 +1,109 @@
+{
+  "signals": [
+    {
+      "handle": "s1",
+      "c_type": "uint8_t",
+      "update_bit": true,
+      "display_name": "Temperature C",
+      "definition": "Temp = val * 0.0625"
+    },
+    {
+      "handle": "s2",
+      "c_type": "uint16_t",
+      "display_name": "Pressure"
+    },
+    {
+      "handle": "s3",
+      "c_type": "uint32_t",
+      "display_name": "Voltage"
+    },
+    {
+      "handle": "i1",
+      "c_type": "uint32_t",
+      "display_name": "Current",
+      "update_bit": true
+    },
+    {
+      "handle": "s4",
+      "c_type": "uint32_t",
+      "display_name": "Current",
+      "update_bit": true
+    },
+    {
+      "handle": "s5",
+      "c_type": "int16_t",
+      "display_name": "Current",
+      "update_bit": true
+    },
+    {
+      "handle": "s6",
+      "c_type": "uint8_t",
+      "display_name": "Current",
+      "update_bit": true
+    }
+
+  ],
+  "frames": [
+    {
+      "min_id": "auto",
+      "handle": "f1",
+      "display_name": "Sensor data",
+      "period_ms": 120.0,
+      "signals": [
+        "s1",
+        "s2",
+        "s3"
+      ]
+    },
+    {
+      "handle": "f3",
+      "min_id": 56,
+      "display_name": "Button press",
+      "period_ms": 250.0,
+      "offset_ms": 100.0,
+      "force_transmit": "i1",
+      "signals": [
+        "i1"
+      ]
+    },
+    {
+      "handle": "f2",
+      "min_id": 57,
+      "display_name": "block data",
+      "period_ms": 8.0
+    },
+    {
+      "handle": "f5",
+      "period_ms": 16.0,
+      "raw": true
+    },
+    {
+      "handle": "f6",
+      "period_ms": 16.0,
+      "raw": true
+    },
+    {
+      "handle": "f7",
+      "period_ms": 50,
+      "signals": [
+        "s4",
+        "s5",
+        "s6"
+      ]
+    }
+  ],
+  "network": {
+    "baud": 9600,
+    "min_period": 8
+  },
+  "input": [
+      "f1",
+      "f2"
+  ],
+  "output": [
+      "f3",
+      "f5",
+      "f6",
+      "f7"
+  ]
+}
