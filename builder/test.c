@@ -21,7 +21,7 @@ void uart_receive(uint8_t *p, uint8_t n)
 }
 
 /* Callback */
-void min_unpack_frame_f8(uint8_t buf[], uint8_t contro)
+void min_unpack_frame_f8(uint8_t buf[], uint8_t control)
 {
 }
 
@@ -33,6 +33,4 @@ void main(void)
 
     min_input();
     min_output();
-
-
 }
