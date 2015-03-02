@@ -171,7 +171,11 @@ void min_frame_received(uint8_t buf[], uint8_t control, uint8_t id)
 {% for frame in frames %}
     {% if frame.input %}
         case {{ frame.min_id }}U:
+        {% if frame.raw %}
+            min_unpack_frame_{{ frame.handle }}(buf, control);
+        {% else %}
             min_unpack_frame_{{ frame.handle }}(buf);
+        {% endif %}
             break;
     {% endif %}
 {% endfor %}

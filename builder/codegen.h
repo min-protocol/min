@@ -29,7 +29,7 @@ void min_queue_frame_{{ frame.handle }}(uint8_t buf[], uint8_t control); /* Raw 
 /* Prototypes for unpacking raw frames; these are callbacks to user-provided functions */
 {% for frame in frames %}
     {% if frame.input and frame.raw %}
-void min_unpack_frame_{{ frame.handle }}(uint8_t buf[], uint8_t control); /* Raw frame; user-provided function */
+void min_unpack_frame_{{ frame.handle }}(uint8_t buf[], uint8_t contro); /* Raw frame; user-provided function */
     {% endif %}
 {% endfor %}
 
