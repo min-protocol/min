@@ -128,40 +128,20 @@ static uint8_t rx_buf[RX_FIFO_MAXSIZE];
  * Hardwired to asynchronous and not using clock doubler so will do 16 samples on receive (better for noise tolerance).
  * The baud parameter will be written straight into the baud rate register.
  */
-void init_uart(uint16_t baud, uint8_t stop_bits, uint8_t data_bits, uint8_t parity)
+void init_uart(uint16_t baud)
 {
-	uint8_t ucsrnc_tmp;
-    
-    /* Initialise FIFOs for UART */
+    /* Initialize FIFOs for UART */
     fifo_init(&tx_fifo, tx_buf, TX_FIFO_MAXSIZE);
     fifo_init(&rx_fifo, rx_buf, RX_FIFO_MAXSIZE);
     
 	/* Clear down UMSELn1 and UMSELn0 to set USART into UART mode.
 	 * Set UMPn1 and UPMn0 according to parity
-	 */
-	ucsrnc_tmp = 0;
-	if(parity == UART_PARITY_EVEN) {
-		ucsrnc_tmp |= (1U << UPMn1);
-	}
-	else if(parity == UART_PARITY_ODD) {
-		ucsrnc_tmp |= (1U << UPMn1) | (1U << UPMn0);
-	}
-	else {
-		/* Parity = none, clear down UPMn bits */
-	}
-	/* Set USBSn according to stop bits */
-	if(stop_bits == 2U) {
-		ucsrnc_tmp |= (1U << USBSn);
-	}
-	/* UCSZn according to data bits */ 
-	if(data_bits == 6U || data_bits == 8U) {
-		ucsrnc_tmp |= (1U << UCSZn0);
-	}
-	if(data_bits == 7U || data_bits == 8U) {
-		ucsrnc_tmp |= (1U << UCSZn1);
-	}
-
-	UCSRnC(UART) = ucsrnc_tmp;
+	 *
+	 * Parity = none, clear down UPMn bits
+	 * Set USBSn to 1 stop bits
+	 * UCSZn according to 8 data bits 
+	 */ 
+	UCSRnC(UART) = (1U << UCSZn0) | (1U << UCSZn1);
 
 	/* Enable interrupt for device ready to receive.
 	 * Also /disable/ UDRIEn interrupt for transmit buffer empty (will be enabled on next write to transmit FIFO).

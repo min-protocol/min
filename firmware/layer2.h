@@ -12,7 +12,7 @@
 #define LAYER2_H_
 
 /* Configure the UART speed (see serial.h for binding to UART and FIFO buffer sizes) */
-#define MIN_BAUD                        (UART_BAUD_57600)
+#define MIN_BAUD                        (UART_BAUD_9600)
 
 /* Command frames from the host */
 #define MIN_ID_PING						(0x02U)			/* Layer 1 frame; Ping test: returns the same frame back */

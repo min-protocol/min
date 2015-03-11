@@ -14,7 +14,7 @@
 
 #define MAX_FRAME_PAYLOAD_SIZE		(15U)
 
-/* Initialise Layer 1 */
+/* Initialize Layer 1 */
 void min_init_layer1(void);
 
 /* Called by Layer 2 to transmit a MIN Layer 1 frame */
@@ -28,5 +28,8 @@ void min_tx_byte(uint8_t byte);
 
 /* Callback; indicate to Layer 2 that a valid frame has been received */
 void min_frame_received(uint8_t buf[], uint8_t control, uint8_t id);		
+
+/* Callback; returns to MIN the space in the transmit FIFO */
+uint8_t min_tx_space(void);
 
 #endif /* MIN_H_ */
