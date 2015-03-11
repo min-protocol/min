@@ -21,6 +21,7 @@ File structure:
 			
 	host/					Python code
 		min.py				MIN 1.0 reference implementation (in Frame and SerialHandler classes)
+	builder/				Work-in-progress on code generator for signals layer
 
 All software and documentation available under the terms of the MIT License:
 
