@@ -1,7 +1,7 @@
 /* Reference implementation of Layer 1 (frame) of MIN 1.0
  * 
  * Author: Ken Tindell
- * Copyright (c) 2014-2015 JK Energy Ltd.
+ * Copyright (c) 2014-2016 JK Energy Ltd.
  * Licensed under MIT License.
  */
 
@@ -176,12 +176,12 @@ static void fletcher16_tx_init(void)
 static void fletcher16_tx_step(uint8_t byte)
 {
 	tx_sum2 += tx_sum1 += byte;
+	tx_sum1 = (tx_sum1 & 0x00ffu) + (tx_sum1 >> 8);
+	tx_sum2 = (tx_sum2 & 0x00ffu) + (tx_sum2 >> 8);
 }
 
 static uint16_t fletcher16_tx_finalize(void)
 {
-	tx_sum1 = (tx_sum1 & 0x00ffu) + (tx_sum1 >> 8);
-	tx_sum2 = (tx_sum2 & 0x00ffu) + (tx_sum2 >> 8);
 	return tx_sum2 << 8 | tx_sum1;
 }
 

@@ -46,8 +46,8 @@ class Frame:
             sum2 += sum1
             sum2 &= 0xffff
 
-        sum1 = (sum1 & 0x00ff) + (sum1 >> 8)
-        sum2 = (sum2 & 0x00ff) + (sum2 >> 8)
+            sum1 = (sum1 & 0x00ff) + (sum1 >> 8)
+            sum2 = (sum2 & 0x00ff) + (sum2 >> 8)
 
         checksum = ((sum2 << 8) & 0xffff) | sum1
 
