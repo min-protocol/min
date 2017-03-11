@@ -1,355 +1,500 @@
-import queue
-import serial
-import threading
-import time
-import argparse
-import msvcrt           # Windows-only; on Linux use getch: https://pypi.python.org/pypi/getch
-
-__author__ = 'kentindell'
-
 """
-Microcontroller Interconnect Network (MIN) version 1.0
+Implementation of T-MIN for Python. Designed to run on a host PC (the target board has a C version).
 
-Python reference implementation and example program
-
-Copyright (c) 2014-2015 JK Energy Ltd.
+Author: Ken Tindell
+Copyright (c) 2014-2017 JK Energy Ltd.
 Licensed under MIT License.
 """
 
+from struct import pack
+from binascii import crc32
+from threading import Lock
+from serial import Serial, SerialException
+from time import time
 
-class Frame:
+
+def int32_to_bytes(value: int) -> bytes:
+        return pack('>I', value)
+
+
+class MINConnectionError(Exception):
+    pass
+
+
+class MINFrame:
+    def __init__(self, min_id: int, payload: bytes, seq: int, transport: bool):
+        self.min_id = min_id & 0x3f
+        self.payload = payload
+        self.seq = seq
+        self.is_transport = transport
+        self.last_sent_time = None  # type: int
+
+
+class MINTransport:
     """
-    Class to handle MIN 1.0 frame handling. Constructed after receiving frame data from the serial port and
-    also in prelude to sending on the serial port.
+    Handle MIN Transport. Runs as a polled system; typically will be subclassed to run in a threaded environment that puts thread locks
+    around API calls.
     """
+
+    # Calls to bind this to a serial system in a host
+    def _now_ms(self) -> int:
+        raise NotImplementedError
+
+    def _serial_write(self, data):
+        raise NotImplementedError
+
+    def _serial_any(self) -> bool:
+        raise NotImplementedError
+
+    def _serial_read_all(self) -> bytes:
+        raise NotImplementedError
+
+    def _serial_close(self):
+        raise NotImplementedError
+
+    ACK = 0xff
+    RESET = 0xfe
 
     HEADER_BYTE = 0xaa
     STUFF_BYTE = 0x55
     EOF_BYTE = 0x55
 
-    def checksum(self):
+    SEARCHING_FOR_SOF = 0
+    RECEIVING_ID_CONTROL = 1
+    RECEIVING_LENGTH = 2
+    RECEIVING_SEQ = 3
+    RECEIVING_PAYLOAD = 4
+    RECEIVING_CHECKSUM_3 = 5
+    RECEIVING_CHECKSUM_2 = 6
+    RECEIVING_CHECKSUM_1 = 7
+    RECEIVING_CHECKSUM_0 = 8
+    RECEIVING_EOF = 9
+
+    def __init__(self, window_size=16, transport_fifo_size=100, idle_timeout_ms=500, ack_retransmit_timeout_ms=10, frame_retransmit_timeout_ms=10, debug=False):
         """
-        Compute Fletcher's checksum (16-bit version)
-
-        sum1 and sum2 are 16 bit integers so must be clipped back to this range
-
-        Return a list of high byte then low byte (big-endian order on the wire)
+        :param window_size: Number of outstanding unacknowledged frames permitted
+        :param transport_fifo_size: Maximum number of outstanding frames
+        :param idle_timeout_ms: Time before connection assumed to have been lost and retransmissions stopped
+        :param ack_retransmit_timeout_ms: Time before ACK frames are resent
+        :param frame_retransmit_timeout_ms: Time before frames are resent
+        :param debug:
         """
-        sum1 = 0xff
-        sum2 = 0xff
+        self._debug = debug
+        self._transport_fifo_size = transport_fifo_size
+        self._ack_retransmit_timeout_ms = ack_retransmit_timeout_ms
+        self._max_window_size = window_size
+        self._idle_timeout_ms = idle_timeout_ms
+        self._frame_retransmit_timeout_ms = frame_retransmit_timeout_ms
 
-        checksummed_data = [self.frame_id, self.get_control()] + self.payload
+        # Stats about the link
+        self._longest_transport_fifo = 0
+        self._dropped_frames = 0
+        self._spurious_acks = 0
+        self._mismatched_acks = 0
+        self._duplicate_frames = 0
+        self._retransmitted_frames = 0
+        self._resets_received = 0
+        self._sequence_mismatch_drops = 0
 
-        for b in checksummed_data:
-            sum1 += b
-            sum1 &= 0xffff  # Results wrapped at 16 bits
-            sum2 += sum1
-            sum2 &= 0xffff
+        # State of transport FIFO
+        self._transport_fifo = None  # type: [MINFrame]
+        self._last_sent_ack_time_ms = None  # type: int
+        self._last_received_anything_ms = None  # type: int
+        self._last_received_frame_ms = None  # type: int
+        self._last_sent_frame_ms = None  # type: int
 
-            sum1 = (sum1 & 0x00ff) + (sum1 >> 8)
-            sum2 = (sum2 & 0x00ff) + (sum2 >> 8)
+        # State for receiving a MIN frame
+        self._rx_frame_buf = bytearray()
+        self._rx_header_bytes_seen = 0
+        self._rx_frame_state = self.SEARCHING_FOR_SOF
+        self._rx_frame_checksum = 0
+        self._rx_payload_bytes = bytearray()
+        self._rx_frame_id_control = 0
+        self._rx_frame_seq = 0
+        self._rx_frame_length = 0
+        self._rx_control = 0
+        self._accepted_min_frames = []
+        self._rx_list = []
 
-        checksum = ((sum2 << 8) & 0xffff) | sum1
+        # Sequence numbers
+        self._rn = 0
+        self._sn_min = 0
+        self._sn_max = 0
 
-        high_byte = (checksum & 0xff00) >> 8
-        low_byte = checksum & 0x00ff
+        self._transport_reset()
 
-        return [high_byte, low_byte]
+    def _transport_fifo_pop(self):
+        assert len(self._transport_fifo) > 0
 
-    def __init__(self, serial_handler, frame_id=0, payload=list()):
+        del self._transport_fifo[0]
+
+    def _transport_fifo_get(self, n: int) -> MINFrame:
+        return self._transport_fifo[n]
+
+    def _transport_fifo_send(self, frame: MINFrame):
+        on_wire_bytes = self._on_wire_bytes(frame=frame)
+        frame.last_sent_time = self._now_ms()
+        self._serial_write(on_wire_bytes)
+
+    def _send_ack(self):
+        ack_frame = MINFrame(min_id=self.ACK, seq=self._rn, payload=bytes(), transport=True)
+        on_wire_bytes = self._on_wire_bytes(frame=ack_frame)
+        self._last_sent_ack_time_ms = self._now_ms()
+        self._serial_write(on_wire_bytes)
+
+    def _send_reset(self):
+        reset_frame = MINFrame(min_id=self.RESET, seq=0, payload=bytes(), transport=True)
+        on_wire_bytes = self._on_wire_bytes(frame=reset_frame)
+        self._serial_write(on_wire_bytes)
+
+    def _transport_fifo_reset(self):
+        self._transport_fifo = []
+        self._last_received_anything_ms = self._now_ms()
+        self._last_sent_ack_time_ms = self._now_ms()
+        self._last_sent_frame_ms = 0
+        self._last_received_frame_ms = 0
+        self._sn_min = 0
+        self._sn_max = 0
+
+    def _transport_reset(self):
+        self._send_reset()
+        self._send_reset()
+
+        self._transport_fifo_reset()
+
+    def send_frame(self, min_id: int, payload: bytes):
         """
-        id is the MIN frame id
-
-        payload is a list of up to 15 bytes that is the payload of the frame
+        Sends a MIN frame with a given ID directly on the wire. Will be silently discarded if any line noise.
+        :param min_id: ID of MIN frame (0 .. 63)
+        :param payload: up to 255 bytes of payload
+        :return:
         """
-        self.frame_id = frame_id
-        self.payload = payload
-        self.stuffed = None
-        self.handler = serial_handler
-        if len(self.payload) > 15:
-            raise Exception("Payload too big")
+        if len(payload) not in range(256):
+            raise ValueError("MIN payload too large")
+        if min_id not in range(64):
+            raise ValueError("MIN ID out of range")
+        frame = MINFrame(min_id=min_id, payload=payload, transport=False, seq=0)
+        on_wire_bytes = self._on_wire_bytes(frame=frame)
+        self._serial_write(on_wire_bytes)
 
-    def transmit(self):
+    def queue_frame(self, min_id: int, payload: bytes):
         """
-        Transmit self through the assigned serial handler
+        Queues a MIN frame for transmission through the transport protocol. Will be retransmitted until it is
+        delivered or the connection has timed out.
+
+        :param min_id: ID of MIN frame (0 .. 63)
+        :param payload: up to 255 bytes of payload
+        :return:
         """
-        self.handler.send_queue.put(self.get_bytes())
+        if len(payload) not in range(256):
+            raise ValueError("MIN payload too large")
+        if min_id not in range(64):
+            raise ValueError("MIN ID out of range")
+        # Frame put into the transport FIFO
+        if len(self._transport_fifo) < self._transport_fifo_size:
+            frame = MINFrame(min_id=min_id, payload=payload, seq=self._sn_max, transport=True)
+            self._transport_fifo.append(frame)
+        else:
+            self._dropped_frames += 1
+            raise MINConnectionError("No space in transport FIFO queue")
 
-    def __str__(self):
-        s = "ID: 0x{0:02x}\n".format(self.frame_id)
-        s += "Payload: {0}\n".format(':'.join('{:02x}'.format(i) for i in self.payload))
+    def _min_frame_received(self, min_id_control: int, min_payload: bytes, min_seq: int):
+        self._last_received_anything_ms = self._now_ms()
 
-        return s
+        if min_id_control & 0x80:
+            if min_id_control == self.ACK:
+                # The ACK number indicates the serial number of the next packet wanted, so any previous packets can be marked off
+                number_acked = (min_seq - self._sn_min) & 0xff
+                number_in_window = (self._sn_max - self._sn_min) & 0xff
+                # Need to guard against old ACKs from an old session still turning up
+                if number_acked <= number_in_window:
+                    self._sn_min = min_seq
 
-    def get_control(self):
+                    assert len(self._transport_fifo) >= number_in_window
+                    assert number_in_window <= self._max_window_size
+
+                    new_number_in_window = (self._sn_max - self._sn_min) & 0xff
+                    if new_number_in_window + number_acked != number_in_window:
+                        raise AssertionError
+
+                    for i in range(number_acked):
+                        self._transport_fifo_pop()
+                else:
+                    self._spurious_acks += 1
+            elif min_id_control == self.RESET:
+                self._resets_received += 1
+                self._transport_fifo_reset()
+            else:
+                # MIN frame received
+                if min_seq == self._rn:
+                    # The next frame in the sequence we are looking for
+                    self._rn = (self._rn + 1) & 0xff
+                    self._send_ack()
+                    self._last_received_frame_ms = self._now_ms()
+                    min_frame = MINFrame(min_id=min_id_control, payload=min_payload, seq=min_seq, transport=True)
+                    self._rx_list.append(min_frame)
+                else:
+                    # Discarding because sequence number mismatch
+                    self._sequence_mismatch_drops += 1
+        else:
+            min_frame = MINFrame(min_id=min_id_control, payload=min_payload, seq=0, transport=False)
+            self._rx_list.append(min_frame)
+
+    def _rx_bytes(self, data: bytes):
         """
-        Get the control byte based on the frame properties
-
-        NB: In MIN 1.0 the top four bits must be set to zero (reserved for future)
+        Called by handler to pass over a sequence of bytes
+        :param data:
         """
-        tmp = 0
-        tmp |= len(self.payload)
+        for byte in data:
+            if self._rx_header_bytes_seen == 2:
+                self._rx_header_bytes_seen = 0
+                if byte == self.HEADER_BYTE:
+                    self._rx_frame_state = self.RECEIVING_ID_CONTROL
+                    continue
+                if byte == self.STUFF_BYTE:
+                    # Discard this byte; carry on receiving the next character
+                    continue
+                # By here something must have gone wrong, give up on this frame and look for new header
+                self._rx_frame_state = self.SEARCHING_FOR_SOF
+                continue
 
-        return tmp
+            if byte == self.HEADER_BYTE:
+                self._rx_header_bytes_seen += 1
+            else:
+                self._rx_header_bytes_seen = 0
 
-    def get_payload(self):
-        return self.payload
+            if self._rx_frame_state == self.SEARCHING_FOR_SOF:
+                pass
+            elif self._rx_frame_state == self.RECEIVING_ID_CONTROL:
+                self._rx_frame_id_control = byte
+                self._rx_payload_bytes = 0
+                if self._rx_frame_id_control & 0x80:
+                    self._rx_frame_state = self.RECEIVING_SEQ
+                else:
+                    self._rx_frame_state = self.RECEIVING_LENGTH
+            elif self._rx_frame_state == self.RECEIVING_SEQ:
+                self._rx_frame_seq = byte
+                self._rx_frame_state = self.RECEIVING_LENGTH
+            elif self._rx_frame_state == self.RECEIVING_LENGTH:
+                self._rx_frame_length = byte
+                self._rx_control = byte
+                self._rx_frame_buf = bytearray()
+                if self._rx_frame_length > 0:
+                    self._rx_frame_state = self.RECEIVING_PAYLOAD
+                else:
+                    self._rx_frame_state = self.RECEIVING_CHECKSUM_3
+            elif self._rx_frame_state == self.RECEIVING_PAYLOAD:
+                self._rx_frame_buf.append(byte)
+                self._rx_frame_length -= 1
+                if self._rx_frame_length == 0:
+                    self._rx_frame_state = self.RECEIVING_CHECKSUM_3
+            elif self._rx_frame_state == self.RECEIVING_CHECKSUM_3:
+                self._rx_frame_checksum = byte << 24
+                self._rx_frame_state = self.RECEIVING_CHECKSUM_2
+            elif self._rx_frame_state == self.RECEIVING_CHECKSUM_2:
+                self._rx_frame_checksum |= byte << 16
+                self._rx_frame_state = self.RECEIVING_CHECKSUM_1
+            elif self._rx_frame_state == self.RECEIVING_CHECKSUM_1:
+                self._rx_frame_checksum |= byte << 8
+                self._rx_frame_state = self.RECEIVING_CHECKSUM_0
+            elif self._rx_frame_state == self.RECEIVING_CHECKSUM_0:
+                self._rx_frame_checksum |= byte
+                computed_checksum = self._crc32(bytearray([self._rx_frame_id_control, self._rx_frame_seq, self._rx_control]) + self._rx_frame_buf)
+                if self._rx_frame_checksum != computed_checksum:
+                    # Frame fails checksum, is dropped
+                    self._rx_frame_state = self.SEARCHING_FOR_SOF
+                else:
+                    # Checksum passes, wait for EOF
+                    self._rx_frame_state = self.RECEIVING_EOF
+            elif self._rx_frame_state == self.RECEIVING_EOF:
+                if byte == self.EOF_BYTE:
+                    # Frame received OK, pass up frame for handling
+                    self._min_frame_received(min_id_control=self._rx_frame_id_control, min_payload=bytes(self._rx_frame_buf), min_seq=self._rx_frame_seq)
 
-    def get_bytes(self):
+                # Look for next frame
+                self._rx_frame_state = self.SEARCHING_FOR_SOF
+            else:
+                # Should never get here but in case we do just reset
+                self._rx_frame_state = self.SEARCHING_FOR_SOF
+
+    def _on_wire_bytes(self, frame: MINFrame) -> bytes:
         """
         Get the on-wire byte sequence for the frame, including stuff bytes after every 0xaa 0xaa pair
         """
-        raw = [self.frame_id] + [self.get_control()] + self.payload + self.checksum()
-        self.stuffed = [self.HEADER_BYTE, self.HEADER_BYTE, self.HEADER_BYTE]
+        if frame.is_transport:
+            prolog = bytes([frame.min_id | 0x80, frame.seq, len(frame.payload)]) + frame.payload
+        else:
+            prolog = bytes([frame.min_id, len(frame.payload)]) + frame.payload
+
+        crc = crc32(prolog, 0)
+        raw = prolog + int32_to_bytes(crc)
+
+        stuffed = bytearray([self.HEADER_BYTE, self.HEADER_BYTE, self.HEADER_BYTE])
 
         count = 0
 
         for i in raw:
-            self.stuffed.append(i)
+            stuffed.append(i)
             if i == self.HEADER_BYTE:
                 count += 1
                 if count == 2:
-                    self.stuffed.append(self.STUFF_BYTE)
+                    stuffed.append(self.STUFF_BYTE)
                     count = 0
             else:
                 count = 0
 
-        self.stuffed.append(self.EOF_BYTE)
+        stuffed.append(self.EOF_BYTE)
 
-        return self.stuffed
+        return bytes(stuffed)
 
-    def get_length(self):
-        return len(self.payload)
+    @staticmethod
+    def _crc32(checksummed_data):
+        return crc32(checksummed_data)
 
-    def get_id(self):
-        return self.frame_id
-
-
-class SerialHandler:
-    """
-    This class handles the serial port and sends frames to the port and receives them from the port.
-
-    It creates two threads, one for writing and one for reading
-    """
-
-    # States for receiving a frame
-    SOF, ID, CONTROL, PAYLOAD, CHECKSUM_HIGH, CHECKSUM_LOW, EOF = range(7)
-
-    def __init__(self, port, baudrate, received_frame_handler):
-        self.header_bytes_seen = 0
-        self.frame_id = 0
-        self.frame_length = 0
-        self.frame_payload = []
-        self.frame_checksum_bytes = []
-        self.payload_bytes_to_go = 0
-        self.frame = None
-        self.state = self.SOF
-        self.serial = serial.Serial(port=port,
-                                    baudrate=baudrate,
-                                    timeout=None,
-                                    parity=serial.PARITY_NONE,
-                                    stopbits=serial.STOPBITS_ONE,
-                                    bytesize=serial.EIGHTBITS)
-
-        self.received_frame_handler = received_frame_handler
-
-        # Initialize receiver and sender threads
-        self.send_queue = queue.Queue()
-
-        self.receive_thread = threading.Thread(target=self.receiver)
-        self.send_thread = threading.Thread(target=self.sender)
-
-        self.receive_thread.daemon = True
-        self.send_thread.daemon = True
-
-        self.receive_thread.start()
-        self.send_thread.start()
-
-    def receiver(self):
+    def transport_stats(self):
         """
-        Receive loop that takes a byte at a time from the serial port and creates a frame
+        Returns a tuple of all the transport stats
         """
-        while True:
-            # Read a byte from the serial line (blocking call)
-            data = self.serial.read(size=1)
-            if args.show_raw:
-                print("Data RX on wire: " + '0x{:02x}'.format(data[0]))
-            self.build_received_frame(data[0])
+        return (self._longest_transport_fifo,
+                self._last_sent_frame_ms,
+                self._sequence_mismatch_drops,
+                self._retransmitted_frames,
+                self._resets_received,
+                self._duplicate_frames,
+                self._mismatched_acks,
+                self._spurious_acks)
 
-    def sender(self):
-        """
-        Feed the queue into the serial port (blocking on reading the queue and the sending)
-        """
-        while True:
-            frame_data = self.send_queue.get()
-            if args.show_raw:
-                print("Data TX on wire: %s" % ':'.join('0x{:02x}'.format(i) for i in frame_data))
-            self.serial.write(data=frame_data)
+    def _find_oldest_frame(self):
+        if len(self._transport_fifo) == 0:
+            raise AssertionError
 
-    def build_received_frame(self, byte):
-        """
-        Read bytes in sequence until a frame has been pulled in
-        """
-        if self.header_bytes_seen == 2:
-            self.header_bytes_seen = 0
-            if byte == Frame.HEADER_BYTE:
-                # If three header bytes in a row, reset state machine and start reading a new frame
-                if args.show_raw:
-                    print("Header seen")
-                self.state = SerialHandler.ID
-                return
-            # Two in a row: we should see a stuff byte
-            if byte != Frame.STUFF_BYTE:
-                # Something has gone wrong with the frame, discard and reset
-                print("Framing error: Missing stuff byte")
-                self.state = SerialHandler.SOF
-                return
-            else:
-                # A stuff byte, discard and carry on receiving on the next byte where we were
-                if args.show_raw:
-                    print("Stuff byte discarded")
-                return
+        window_size = (self._sn_max - self._sn_min) & 0xff
+        oldest_frame = self._transport_fifo[0]  # type: MINFrame
+        longest_elapsed_time = (self._now_ms() - oldest_frame.last_sent_time)
 
-        if byte == Frame.HEADER_BYTE:
-            self.header_bytes_seen += 1
+        for i in range(window_size):
+            elapsed = self._now_ms() - self._transport_fifo[i].last_sent_time
+            if elapsed >= longest_elapsed_time:
+                oldest_frame = self._transport_fifo[i]
+                longest_elapsed_time = elapsed
+
+        return oldest_frame
+
+    def poll(self):
+        """
+        Polls the serial line, runs through MIN, sends ACKs, handles retransmits where ACK has gone missing.
+
+        :return: array of accepted MIN frames
+        """
+        remote_connected = (self._now_ms() - self._last_received_anything_ms) < self._idle_timeout_ms
+        remote_active = (self._now_ms() - self._last_received_frame_ms) < self._idle_timeout_ms
+
+        self._rx_list = []
+
+        data = self._serial_read_all()
+        if data:
+            self._rx_bytes(data=data)
+
+        window_size = (self._sn_max - self._sn_min) & 0xff
+        if window_size < self._max_window_size and len(self._transport_fifo) > window_size:
+            # Frames still to send
+            frame = self._transport_fifo_get(n=window_size)
+            frame.seq = self._sn_max
+            self._last_sent_frame_ms = self._now_ms()
+            frame.last_sent_time = self._now_ms()
+            self._transport_fifo_send(frame=frame)
+            self._sn_max = (self._sn_max + 1) & 0xff
         else:
-            self.header_bytes_seen = 0
+            # Maybe retransmits
+            if window_size > 0 and remote_connected:
+                oldest_frame = self._find_oldest_frame()
+                if self._now_ms() - oldest_frame.last_sent_time > self._frame_retransmit_timeout_ms:
+                    self._transport_fifo_send(frame=oldest_frame)
 
-        if self.state == SerialHandler.ID:
-            if args.show_raw:
-                print("ID byte")
-            self.frame_id = byte
-            self.state = SerialHandler.CONTROL
-        elif self.state == SerialHandler.CONTROL:
-            if args.show_raw:
-                print("control byte")
-            self.frame_length = byte & 0x0f
-            if args.show_raw:
-                print("control byte %s [length=%d]"
-                      % ('0b{:08b}'.format(byte),
-                         self.frame_length))
-            self.payload_bytes_to_go = self.frame_length
-            self.frame_payload = []
-            if self.payload_bytes_to_go > 0:
-                self.state = SerialHandler.PAYLOAD
-            else:
-                self.state = SerialHandler.CHECKSUM_HIGH
-        elif self.state == SerialHandler.PAYLOAD:
-            if args.show_raw:
-                print("payload byte")
-            self.frame_payload.append(byte)
-            self.payload_bytes_to_go -= 1
-            if self.payload_bytes_to_go == 0:
-                self.state = SerialHandler.CHECKSUM_HIGH
-        elif self.state == SerialHandler.CHECKSUM_HIGH:
-            if args.show_raw:
-                print("checksum high")
-            self.frame_checksum_bytes = [byte]
-            self.state = SerialHandler.CHECKSUM_LOW
-        elif self.state == SerialHandler.CHECKSUM_LOW:
-            if args.show_raw:
-                print("checksum low")
-            self.frame_checksum_bytes.append(byte)
-            # Construct the frame object
-            self.frame = Frame(serial_handler=self,
-                               frame_id=self.frame_id,
-                               payload=self.frame_payload)
-            checksum_bytes = self.frame.checksum()
-            if checksum_bytes != self.frame_checksum_bytes:
-                # Checksum failure, drop it and look for a new one
-                print("FAILED CHECKSUM")
-                self.state = SerialHandler.SOF
-            else:
-                self.state = SerialHandler.EOF
-        elif self.state == SerialHandler.EOF:
-            if byte == Frame.EOF_BYTE:
-                if args.show_raw:
-                    print("EOF, frame passed up")
-                    print(self.frame)
-                # Frame is well-formed,pass it up for handling
-                self.received_frame_handler(frame=self.frame)
+        # Periodically transmit ACK
+        if self._now_ms() - self._last_sent_ack_time_ms > self._ack_retransmit_timeout_ms:
+            if remote_active:
+                self._send_ack()
 
-            self.state = SerialHandler.SOF
+        if (self._sn_max - self._sn_max) & 0xff > window_size:
+            raise AssertionError
+
+        return self._rx_list
+
+    def close(self):
+        self._serial_close()
 
 
-# Decoder MIN network order 16-bit and 32-bit words
-def min_decode(data):
-    if len(data) == 2:
-        # 16-bit big-endian integer
-        return (data[0] << 8) | (data[1])
-    elif len(data) == 4:
-        # 32-bit big-endian integer
-        return (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | (data[3])
+class MINTransportSerial(MINTransport):
+    """
+    Bound to Pyserial driver. But not thread safe: must not call poll() and send() at the same time.
+    """
+    def _now_ms(self):
+        now = int(time() * 1000.0)
+        return now
+
+    def _serial_write(self, data):
+        self._serial.write(data)
+
+    def _serial_any(self):
+        return self._serial.in_waiting > 0
+
+    def _serial_read_all(self):
+        return self._serial.read_all()
+
+    def _serial_close(self):
+        self._serial.close()
+
+    def __init__(self, port, debug=True):
+        """
+        Open MIN connection on a given port.
+        :param port: serial port
+        :param debug:
+        """
+        try:
+            self._serial = Serial(port=port, timeout=0.1, write_timeout=None)
+            self._serial.read(1000)  # Flush any stale input away (well, most of it)
+        except SerialException:
+            raise MINConnectionError("Transport MIN cannot open port '{}'".format(port))
+        super().__init__(debug=debug)
 
 
-# Encode a 32-bit integer into MIN network order bytes
-def min_encode_32(x):
-    return [(x & 0xff000000) >> 24, (x & 0x00ff0000) >> 16, (x & 0x0000ff00) >> 8, (x & 0x000000ff)]
+class ThreadsafeTransportMINSerialHandler(MINTransportSerial):
+    """
+    This class wraps the API calls with thread locks to prevent concurrent access to the system.
 
+    A typical usage is to create a simple thread that calls poll() in a loop which takes MIN frames received and puts them into a Python queue.
+    The application can send directly and pick up incoming frames from the queue.
+    """
+    def __init__(self, port, debug=False):
+        super().__init__(port=port, debug=debug)
+        self._thread_lock = Lock()
 
-# Encode a 16-bit integer into MIN network order bytes
-def min_encode_16(x):
-    return [(x & 0x0000ff00) >> 8, (x & 0x000000ff)]
+    def close(self):
+        self._thread_lock.acquire()
+        super().close()
+        self._thread_lock.release()
 
+    def transport_stats(self):
+        self._thread_lock.acquire()
+        result = super().transport_stats()
+        self._thread_lock.release()
 
-# Called when a MIN frame has been received successfully from the serial line
-def received_frame(frame):
-    message_id = frame.get_id()
-    data = frame.get_payload()
+        return result
 
-    if args.quiet:
-        pass
-    else:
-        if message_id == 0x0e:      # Deadbeef message
-            print("RX deadbeef: " + ':'.join('{:02x}'.format(i) for i in data))
-        elif message_id == 0x23:            # Environment message
-            temperature = -20.0 + (min_decode(data[0:2]) * 0.0625)
-            humidity = min_decode(data[2:4]) * 0.64
-            print("Environment: temperature={0}C, humidity={1}%".format(temperature, humidity))
-        elif message_id == 0x24:            # Motor status message
-            status = data[0]
-            position = min_decode(data[1:5])
-            print("Motor: status={}, position={}".format(status, position))
-        elif message_id == 0x02:
-            print("Ping received: " + ':'.join('{:02x}'.format(i) for i in data))
+    def send_frame(self, min_id: int, payload: bytes):
+        self._thread_lock.acquire()
+        super().send_frame(min_id=min_id, payload=payload)
+        self._thread_lock.release()
 
+    def queue_frame(self, min_id: int, payload: bytes):
+        self._thread_lock.acquire()
+        super().queue_frame(min_id=min_id, payload=payload)
+        self._thread_lock.release()
 
-# Interactive menu to send frames on a keypress
-def interactive_controller():
-    print("Interactive MIN controller:")
-    print("p        Send ping frame")
-    print("m        Send motor request")
+    def poll(self):
+        self._thread_lock.acquire()
+        result = super().poll()
+        self._thread_lock.release()
 
-    while True:
-        ch = msvcrt.getch()
-        if ch == b'p':
-            f = Frame(controller, frame_id=0x02, payload=[0xca, 0xfe, 0xf0, 0x0d])
-            f.transmit()
-            print("Ping frame queued")
-        elif ch == b'm':
-            payload = min_encode_32(1000000) + min_encode_16(5000)
-            f = Frame(controller, frame_id=0x36, payload=payload)
-            f.transmit()
-            print("Motor request sent")
-        else:
-            pass
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="MIN controller")
-
-    parser.add_argument('-p', dest='port', default="COM4", type=str, help="Serial port, e.g. COM3")
-    parser.add_argument('-listen_only', action='store_true')
-    parser.add_argument('-baud', default=9600, type=int)
-    parser.add_argument('-show_raw', action='store_true')
-    parser.add_argument('-quiet', action='store_true')
-
-    args = parser.parse_args()
-    controller = SerialHandler(port=args.port, baudrate=args.baud, received_frame_handler=received_frame)
-
-    if args.listen_only:
-        print("Listening only")
-    else:
-        interactive_controller()
-
-    print("MIN controller running")
-    time.sleep(3600.0)
+        return result

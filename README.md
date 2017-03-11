@@ -8,26 +8,17 @@ http://github.com/min-protocol/min/wiki
 
 File structure:
 
-	firmware/				Embedded C code
-		min/			
-			layer1.c		MIN 1.0 reference implementation
-			min.h			API definition
-		main.c				Test program
-		serial.h			Serial handler for ATmega640 USART
-		serial.c
-		layer2.h			Application layer for example program
-		layer2.c
-		main.c				Example program
-			
-	host/					Python code
-		min.py				MIN 1.0 reference implementation (in Frame and SerialHandler classes)
-	builder/				Work-in-progress on code generator for signals layer
+    target/	                Embedded code
+        min.c               MIN code designed to run on an embedded system (from 8-bit MCUs upwards)
+        min.h               Header file that defines the API to min
+    host/                   Python code to run on a host PC
+        min.py              MIN 2.0 reference implementation with support for MIN via Pyserial
 
 All software and documentation available under the terms of the MIT License:
 
 	The MIT License (MIT)
 	
-	Copyright (c) 2014-2015 JK Energy Ltd.
+	Copyright (c) 2014-2017 JK Energy Ltd.
 	
 	Permission is hereby granted, free of charge, to any person obtaining a copy
 	of this software and associated documentation files (the "Software"), to deal
@@ -46,4 +37,3 @@ All software and documentation available under the terms of the MIT License:
 	LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 	OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 	THE SOFTWARE.
-
