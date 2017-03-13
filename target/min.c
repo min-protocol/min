@@ -440,15 +440,15 @@ static void rx_byte(min_context_t *self, uint8_t byte)
             }
             break;
         case RECEIVING_CHECKSUM_3:
-            self->rx_frame_checksum = byte << 24;
+            self->rx_frame_checksum = ((uint32_t)byte) << 24;
             self->rx_frame_state = RECEIVING_CHECKSUM_2;
             break;
         case RECEIVING_CHECKSUM_2:
-            self->rx_frame_checksum |= byte << 16;
+            self->rx_frame_checksum |= ((uint32_t)byte) << 16;
             self->rx_frame_state = RECEIVING_CHECKSUM_1;
             break;
         case RECEIVING_CHECKSUM_1:
-            self->rx_frame_checksum |= byte << 8;
+            self->rx_frame_checksum |= ((uint32_t)byte) << 8;
             self->rx_frame_state = RECEIVING_CHECKSUM_0;
             break;
         case RECEIVING_CHECKSUM_0:
