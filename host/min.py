@@ -17,6 +17,10 @@ def int32_to_bytes(value: int) -> bytes:
         return pack('>I', value)
 
 
+def bytes_to_hexstr(b: bytes) -> str:
+    return "".join("{:02x}".format(byte) for byte in b)
+
+
 class MINConnectionError(Exception):
     pass
 
@@ -137,12 +141,16 @@ class MINTransport:
         self._serial_write(on_wire_bytes)
 
     def _send_ack(self):
+        if self._debug:
+            print("Sending ACK, seq={}".format(self._rn))
         ack_frame = MINFrame(min_id=self.ACK, seq=self._rn, payload=bytes(), transport=True)
         on_wire_bytes = self._on_wire_bytes(frame=ack_frame)
         self._last_sent_ack_time_ms = self._now_ms()
         self._serial_write(on_wire_bytes)
 
     def _send_reset(self):
+        if self._debug:
+            print("Sending RESET")
         reset_frame = MINFrame(min_id=self.RESET, seq=0, payload=bytes(), transport=True)
         on_wire_bytes = self._on_wire_bytes(frame=reset_frame)
         self._serial_write(on_wire_bytes)
@@ -175,6 +183,8 @@ class MINTransport:
             raise ValueError("MIN ID out of range")
         frame = MINFrame(min_id=min_id, payload=payload, transport=False, seq=0)
         on_wire_bytes = self._on_wire_bytes(frame=frame)
+        if self._debug:
+            print("Sending MIN frame, on wire bytes={}".format(bytes_to_hexstr(on_wire_bytes)))
         self._serial_write(on_wire_bytes)
 
     def queue_frame(self, min_id: int, payload: bytes):
@@ -200,9 +210,12 @@ class MINTransport:
 
     def _min_frame_received(self, min_id_control: int, min_payload: bytes, min_seq: int):
         self._last_received_anything_ms = self._now_ms()
-
+        if self._debug:
+            print("MIN frame received (min_id_control={:02x})".format(self._rx_frame_id_control))
         if min_id_control & 0x80:
             if min_id_control == self.ACK:
+                if self._debug:
+                    print("ACK received, seq={}".format(min_seq))
                 # The ACK number indicates the serial number of the next packet wanted, so any previous packets can be marked off
                 number_acked = (min_seq - self._sn_min) & 0xff
                 number_in_window = (self._sn_max - self._sn_min) & 0xff
@@ -222,6 +235,8 @@ class MINTransport:
                 else:
                     self._spurious_acks += 1
             elif min_id_control == self.RESET:
+                if self._debug:
+                    print("RESET received".format(min_seq))
                 self._resets_received += 1
                 self._transport_fifo_reset()
             else:
@@ -232,6 +247,8 @@ class MINTransport:
                     self._send_ack()
                     self._last_received_frame_ms = self._now_ms()
                     min_frame = MINFrame(min_id=min_id_control, payload=min_payload, seq=min_seq, transport=True)
+                    if self._debug:
+                        print("MIN frame received (min_id={:02x})".format(min_id_control))
                     self._rx_list.append(min_frame)
                 else:
                     # Discarding because sequence number mismatch
@@ -245,6 +262,8 @@ class MINTransport:
         Called by handler to pass over a sequence of bytes
         :param data:
         """
+        if self._debug:
+            print("Received bytes: {}".format(bytes_to_hexstr(data)))
         for byte in data:
             if self._rx_header_bytes_seen == 2:
                 self._rx_header_bytes_seen = 0
