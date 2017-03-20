@@ -4,6 +4,13 @@
 
 #include "min.h"
 
+#define TRANSPORT_FIFO_SIZE_FRAMES_MASK             ((uint8_t)((1U << TRANSPORT_FIFO_SIZE_FRAMES_BITS) - 1U))
+#define TRANSPORT_FIFO_SIZE_FRAME_DATA_MASK         ((uint16_t)((1U << TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS) - 1U))
+
+// Number of bytes needed for a frame with a given payload length, excluding stuff bytes
+// 3 header bytes, ID/control byte, length byte, seq byte, 4 byte CRC, EOF byte
+#define ON_WIRE_SIZE(p)                             ((p) + 11U)
+
 // Special protocol bytes
 enum {
     HEADER_BYTE = 0xaaU,
@@ -30,7 +37,7 @@ enum {
 #define TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS         (5U)
 #define TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS       (5U)
 #define TRANSPORT_MAX_WINDOW_SIZE                   (4U)
-#define TRANSPORT_IDLE_TIMEOUT_MS                   (1000U)
+#define TRANSPORT_IDLE_TIMEOUT_MS                   (2000U)
 
 enum {
     // Top bit must be set: these are for the transport protocol to use
@@ -39,16 +46,19 @@ enum {
     RESET = 0xfeU,
 };
 
+// Where the payload data of the frame FIFO is stored
+uint8_t payloads_ring_buffer[TRANSPORT_FIFO_MAX_FRAME_DATA];
+
 static uint32_t now;
-static void send_reset(min_context_t *self);
+static void send_reset(struct min_context *self);
 #endif
 
-static void crc32_init_context(crc32_context_t *context)
+static void crc32_init_context(struct crc32_context *context)
 {
     context->crc = 0xffffffffU;
 }
 
-static void crc32_step(crc32_context_t *context, uint8_t byte)
+static void crc32_step(struct crc32_context *context, uint8_t byte)
 {
     context->crc ^= byte;
     for(uint32_t j = 0; j < 8; j++) {
@@ -57,13 +67,13 @@ static void crc32_step(crc32_context_t *context, uint8_t byte)
     }
 }
 
-static uint32_t crc32_finalize(crc32_context_t *context)
+static uint32_t crc32_finalize(struct crc32_context *context)
 {
     return ~context->crc;
 }
 
 
-static void stuffed_tx_byte(min_context_t *self, uint8_t byte)
+static void stuffed_tx_byte(struct min_context *self, uint8_t byte)
 {
     // Transmit the byte
     min_tx_byte(self->port, byte);
@@ -81,7 +91,7 @@ static void stuffed_tx_byte(min_context_t *self, uint8_t byte)
     }
 }
 
-static void on_wire_bytes(min_context_t *self, uint8_t id_control, uint8_t seq, uint8_t *payload, uint8_t payload_len)
+static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t seq, uint8_t *payload_base, uint16_t payload_offset, uint16_t payload_mask, uint8_t payload_len)
 {
     uint8_t n, i;
     uint32_t checksum;
@@ -103,7 +113,9 @@ static void on_wire_bytes(min_context_t *self, uint8_t id_control, uint8_t seq, 
     stuffed_tx_byte(self, payload_len);
 
     for(i = 0, n = payload_len; n > 0; n--, i++) {
-        stuffed_tx_byte(self, payload[i]);
+        stuffed_tx_byte(self, payload_base[payload_offset]);
+        payload_offset++;
+        payload_offset &= payload_mask;
     }
 
     checksum = crc32_finalize(&self->tx_checksum);
@@ -120,81 +132,100 @@ static void on_wire_bytes(min_context_t *self, uint8_t id_control, uint8_t seq, 
 }
 
 #ifdef TRANSPORT_PROTOCOL
-// Pops frame from front of queue
-static void transport_fifo_pop(min_context_t *self)
+
+// Pops frame from front of queue, reclaims its ring buffer space
+static void transport_fifo_pop(struct min_context *self)
 {
 #ifdef ASSERTION_CHECKING
-    assert(self->transport_fifo.n_frames != 0);
+    uint32_t n_frames = self->transport_fifo.n_frames;
+    assert(n_frames != 0);
 #endif
+    struct transport_frame *frame = &self->transport_fifo.frames[self->transport_fifo.head_idx];
+
+#ifdef ASSERTION_CHECKING
+    assert(self->transport_fifo.n_ring_buffer_bytes >= frame->payload_len);
+#endif
+
     self->transport_fifo.n_frames--;
     self->transport_fifo.head_idx++;
-    if(self->transport_fifo.head_idx == TRANSPORT_FIFO_SIZE) {
-        self->transport_fifo.head_idx = 0;
-    }
+    self->transport_fifo.head_idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
+    self->transport_fifo.n_ring_buffer_bytes -= frame->payload_len;
 }
 
 // Claim a buffer slot from the FIFO. Returns 0 if there is no space.
-static transport_frame_t *transport_fifo_push(min_context_t *self)
+static struct transport_frame *transport_fifo_push(struct min_context *self, uint16_t data_size)
 {
-    transport_frame_t *ret;
-    if(self->transport_fifo.n_frames < TRANSPORT_FIFO_SIZE) {
-        self->transport_fifo.n_frames++;
-        if(self->transport_fifo.n_frames > self->transport_fifo.n_frames_max) { // High-water mark of FIFO
-            self->transport_fifo.n_frames_max = self->transport_fifo.n_frames;
+    // A frame is only queued if there aren't too many frames in the FIFO and there is space in the
+    // data ring buffer.
+    struct transport_frame *ret = 0;
+    if(self->transport_fifo.n_frames < TRANSPORT_FIFO_MAX_FRAMES) {
+        // Is there space in the ring buffer for the frame payload?
+        if(self->transport_fifo.n_ring_buffer_bytes <= TRANSPORT_FIFO_MAX_FRAME_DATA - data_size) {
+            self->transport_fifo.n_frames++;
+            if (self->transport_fifo.n_frames > self->transport_fifo.n_frames_max) {
+                // High-water mark of FIFO (for diagnostic purposes)
+                self->transport_fifo.n_frames_max = self->transport_fifo.n_frames;
+            }
+            // Create FIFO entry
+            ret = &(self->transport_fifo.frames[self->transport_fifo.tail_idx]);
+            ret->payload_offset = self->transport_fifo.ring_buffer_tail_offset;
+
+            // Claim ring buffer space
+            self->transport_fifo.n_ring_buffer_bytes += data_size;
+            if(self->transport_fifo.n_ring_buffer_bytes > self->transport_fifo.n_ring_buffer_bytes_max) {
+                // High-water mark of ring buffer usage (for diagnostic purposes)
+                self->transport_fifo.n_ring_buffer_bytes_max = self->transport_fifo.n_ring_buffer_bytes;
+            }
+            self->transport_fifo.ring_buffer_tail_offset += data_size;
+            self->transport_fifo.ring_buffer_tail_offset &= TRANSPORT_FIFO_SIZE_FRAME_DATA_MASK;
+
+            // Claim FIFO space
+            self->transport_fifo.tail_idx++;
+            self->transport_fifo.tail_idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
         }
-        ret = &(self->transport_fifo.frames[self->transport_fifo.tail_idx++]);  // Caller will copy in the frame details
-        if(self->transport_fifo.tail_idx == TRANSPORT_FIFO_SIZE) {
-            // Wrap the tail index
-            self->transport_fifo.tail_idx = 0;
-        }
-    }
-    else {
-        ret = 0;
     }
     return ret;
 }
 
 // Return the nth frame in the FIFO
-static transport_frame_t *transport_fifo_get(min_context_t *self, uint8_t n)
+static struct transport_frame *transport_fifo_get(struct min_context *self, uint8_t n)
 {
-    // Because of FIFO modulo arithmetic we need to search back down the FIFO
-    // serially (will only have to do this at most TRANSPORT_MAX_WINDOW_SIZE steps)
     uint8_t idx = self->transport_fifo.head_idx;
-    for(uint8_t i = 0; i < n; i++) {
-        idx++;
-        if(idx == TRANSPORT_FIFO_SIZE) {
-            idx = 0;
-        }
-    }
-    return &self->transport_fifo.frames[idx];
+    return &self->transport_fifo.frames[(idx + n) & TRANSPORT_FIFO_SIZE_FRAMES_MASK];
 }
 
 // Sends the given frame to the serial line
-static void transport_fifo_send(min_context_t *self, transport_frame_t *frame)
+static void transport_fifo_send(struct min_context *self, struct transport_frame *frame)
 {
-    on_wire_bytes(self, frame->min_id | (uint8_t)0x80U, frame->seq, frame->payload, frame->payload_len);
+    on_wire_bytes(self, frame->min_id | (uint8_t)0x80U, frame->seq, payloads_ring_buffer, frame->payload_offset, TRANSPORT_FIFO_SIZE_FRAME_DATA_MASK, frame->payload_len);
     frame->last_sent_time_ms = now;
 }
 
-// We don't queue an ACK frame - we send it straight away
-static void send_ack(min_context_t *self)
+// We don't queue an ACK frame - we send it straight away (if there's space to do so)
+static void send_ack(struct min_context *self)
 {
-    on_wire_bytes(self, ACK, self->transport_fifo.rn, 0 , 0);
-    self->transport_fifo.last_sent_ack_time_ms = now;
+    if(ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
+        on_wire_bytes(self, ACK, self->transport_fifo.rn, 0, 0, 0, 0);
+        self->transport_fifo.last_sent_ack_time_ms = now;
+    }
 }
 
-// We don't queue an RESET frame - we send it straight away
-static void send_reset(min_context_t *self)
+// We don't queue an RESET frame - we send it straight away (if there's space to do so)
+static void send_reset(struct min_context *self)
 {
-    on_wire_bytes(self, RESET, 0, 0 , 0);
+    if(ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
+        on_wire_bytes(self, RESET, 0, 0, 0, 0, 0);
+    }
 }
 
-static void transport_fifo_reset(min_context_t *self)
+static void transport_fifo_reset(struct min_context *self)
 {
     // Clear down the transmission FIFO queue
     self->transport_fifo.n_frames = 0;
     self->transport_fifo.head_idx = 0;
     self->transport_fifo.tail_idx = 0;
+    self->transport_fifo.n_ring_buffer_bytes = 0;
+    self->transport_fifo.ring_buffer_tail_offset = 0;
     self->transport_fifo.sn_max = 0;
     self->transport_fifo.sn_min = 0;
     self->transport_fifo.rn = 0;
@@ -205,7 +236,7 @@ static void transport_fifo_reset(min_context_t *self)
     self->transport_fifo.last_received_frame_ms = 0;
 }
 
-static void transport_reset(min_context_t *self)
+static void transport_reset(struct min_context *self)
 {
     // Tell the other end we have gone away
     send_reset(self);
@@ -217,17 +248,21 @@ static void transport_reset(min_context_t *self)
 // Queues a MIN ID / payload frame into the outgoing FIFO
 // API call.
 // Returns true if the frame was queued OK.
-bool min_queue_frame(min_context_t *self, uint8_t min_id, uint8_t *payload, uint8_t payload_len)
+bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t *payload, uint8_t payload_len)
 {
-    transport_frame_t *frame = transport_fifo_push(self); // Claim a FIFO slot
+    struct transport_frame *frame = transport_fifo_push(self, payload_len); // Claim a FIFO slot, reserve space for payload
 
     // We are just queueing here: the poll() function puts the frame into the window and on to the wire
     if(frame != 0) {
-        // Copy frame details into frame slot
+        // Copy frame details into frame slot, copy payload into ring buffer
         frame->min_id = min_id & (uint8_t)0x3fU;
         frame->payload_len = payload_len;
+
+        uint16_t payload_offset = frame->payload_offset;
         for(uint32_t i = 0; i < payload_len; i++) {
-            frame->payload[i] = payload[i];
+            payloads_ring_buffer[payload_offset] = payload[i];
+            payload_offset++;
+            payload_offset &= TRANSPORT_FIFO_SIZE_FRAME_DATA_MASK;
         }
         return true;
     }
@@ -238,7 +273,7 @@ bool min_queue_frame(min_context_t *self, uint8_t min_id, uint8_t *payload, uint
 }
 
 // Finds the frame in the window that was sent least recently
-static transport_frame_t *find_retransmit_frame(min_context_t *self)
+static struct transport_frame *find_retransmit_frame(struct min_context *self)
 {
     uint8_t window_size = self->transport_fifo.sn_max - self->transport_fifo.sn_min;
 
@@ -248,7 +283,7 @@ static transport_frame_t *find_retransmit_frame(min_context_t *self)
 #endif
 
     // Start with the head of the queue and call this the oldest
-    transport_frame_t *oldest_frame = &self->transport_fifo.frames[self->transport_fifo.head_idx];
+    struct transport_frame *oldest_frame = &self->transport_fifo.frames[self->transport_fifo.head_idx];
     uint32_t oldest_elapsed_time = now - oldest_frame->last_sent_time_ms;
 
     uint8_t idx = self->transport_fifo.head_idx;
@@ -259,9 +294,7 @@ static transport_frame_t *find_retransmit_frame(min_context_t *self)
             oldest_frame = &self->transport_fifo.frames[idx];
         }
         idx++;
-        if(idx == TRANSPORT_FIFO_SIZE) {
-            idx = 0;
-        }
+        idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
     }
 
     return oldest_frame;
@@ -270,7 +303,7 @@ static transport_frame_t *find_retransmit_frame(min_context_t *self)
 
 // This runs the receiving half of the transport protocol, acknowledging frames received, discarding
 // duplicates received, and handling RESET requests.
-static void valid_frame_received(min_context_t *self)
+static void valid_frame_received(struct min_context *self)
 {
     uint8_t id_control = self->rx_frame_id_control;
     uint8_t *payload = self->rx_frame_payload_buf;
@@ -288,6 +321,7 @@ static void valid_frame_received(min_context_t *self)
         case ACK:
             // If we get an ACK then we remove all the acknowledged frames with seq < rn
             // But we need to make sure we don't accidentally ACK too many because of a stale ACK from an old session
+
 
             num_acked = seq - self->transport_fifo.sn_min;
             num_in_window = self->transport_fifo.sn_max - self->transport_fifo.sn_min;
@@ -320,6 +354,10 @@ static void valid_frame_received(min_context_t *self)
         default:
             if (id_control & 0x80U) {
                 // Incoming application frames
+
+                // Reset the activity time (an idle connection will be stalled)
+                self->transport_fifo.last_received_frame_ms = now;
+
                 if (seq == self->transport_fifo.rn) {
                     // Accept this frame as matching the sequence number we were looking for
 
@@ -334,8 +372,6 @@ static void valid_frame_received(min_context_t *self)
                     send_ack(self);
 
                     // Now ready to pass this up to the application handlers
-                    // Reset the activity time (an idle connection will be stalled)
-                    self->transport_fifo.last_received_frame_ms = now;
 
                     // Pass frame up to application handler to deal with
                     min_application_handler(id_control & (uint8_t)0x3fU, payload, payload_len, self->port);
@@ -350,13 +386,14 @@ static void valid_frame_received(min_context_t *self)
                 // Not a transport frame
                 min_application_handler(id_control & (uint8_t)0x3fU, payload, payload_len, self->port);
             }
+            break;
     }
 #else
     min_application_handler(id_control & (uint8_t)0x3fU, payload, payload_len);
 #endif
 }
 
-static void rx_byte(min_context_t *self, uint8_t byte)
+static void rx_byte(struct min_context *self, uint8_t byte)
 {
     // Regardless of state, three header bytes means "start of frame" and
     // should reset the frame buffer and be ready to receive frame data
@@ -465,11 +502,11 @@ static void rx_byte(min_context_t *self, uint8_t byte)
             break;
         case RECEIVING_EOF:
             if(byte == 0x55u) {
-                /* Frame received OK, pass up data to handler */
+                // Frame received OK, pass up data to handler
                 valid_frame_received(self);
             }
-            /* else discard */
-            /* Look for next frame */
+            // else discard
+            // Look for next frame */
             self->rx_frame_state = SEARCHING_FOR_SOF;
             break;
         default:
@@ -480,7 +517,7 @@ static void rx_byte(min_context_t *self, uint8_t byte)
 }
 
 // API call: sends received bytes into a MIN context and runs the transport timeouts
-void min_poll(min_context_t *self, uint8_t *buf, uint32_t buf_len)
+void min_poll(struct min_context *self, uint8_t *buf, uint32_t buf_len)
 {
     for(uint32_t i = 0; i < buf_len; i++) {
         rx_byte(self, buf[i]);
@@ -497,22 +534,26 @@ void min_poll(min_context_t *self, uint8_t *buf, uint32_t buf_len)
     // This sends one new frame or resends one old frame
     window_size = self->transport_fifo.sn_max - self->transport_fifo.sn_min; // Window size
     if((window_size < TRANSPORT_MAX_WINDOW_SIZE) && (self->transport_fifo.n_frames > window_size)) {
-        // There are new frames we can send
-        transport_frame_t *frame = transport_fifo_get(self, window_size);
-        frame->seq = self->transport_fifo.sn_max;
-        transport_fifo_send(self, frame);
+        // There are new frames we can send; but don't even bother if there's no buffer space for them
+        struct transport_frame *frame = transport_fifo_get(self, window_size);
+        if(ON_WIRE_SIZE(frame->payload_len) < min_tx_space(self->port)) {
+            frame->seq = self->transport_fifo.sn_max;
+            transport_fifo_send(self, frame);
 
-        // Move window on
-        self->transport_fifo.sn_max++;
+            // Move window on
+            self->transport_fifo.sn_max++;
+        }
     }
     else {
         // Sender cannot send new frames so resend old ones (if there's anyone there)
         if((window_size > 0) && remote_connected) {
             // There are unacknowledged frames. Can re-send an old frame. Pick the least recently sent one.
-            transport_frame_t *oldest_frame = find_retransmit_frame(self);
+            struct transport_frame *oldest_frame = find_retransmit_frame(self);
             if(now - oldest_frame->last_sent_time_ms >= TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS) {
-                // pResending oldest frame
-                transport_fifo_send(self, oldest_frame);
+                // Resending oldest frame if there's a chance there's enough space to send it
+                if(ON_WIRE_SIZE(oldest_frame->payload_len) <= min_tx_space(self->port)) {
+                    transport_fifo_send(self, oldest_frame);
+                }
             }
         }
     }
@@ -526,7 +567,7 @@ void min_poll(min_context_t *self, uint8_t *buf, uint32_t buf_len)
 #endif
 }
 
-void min_init_context(min_context_t *self, uint8_t port)
+void min_init_context(struct min_context *self, uint8_t port)
 {
     // Initialize context
     self->rx_header_bytes_seen = 0;
@@ -539,14 +580,17 @@ void min_init_context(min_context_t *self, uint8_t port)
     self->transport_fifo.sequence_mismatch_drop = 0;
     self->transport_fifo.dropped_frames = 0;
     self->transport_fifo.resets_received = 0;
-
+    self->transport_fifo.n_ring_buffer_bytes_max = 0;
+    self->transport_fifo.n_frames_max = 0;
     // Reset the other end so that any old cruft is discarded
     transport_reset(self);
 #endif
 }
 
 // Sends an application MIN frame on the wire (do not put into the transport queue)
-void min_send_frame(min_context_t *self, uint8_t min_id, uint8_t *payload, uint8_t payload_len)
+void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t *payload, uint8_t payload_len)
 {
-    on_wire_bytes(self, min_id & (uint8_t)0x3fU, 0, payload, payload_len);
+    if((ON_WIRE_SIZE(payload_len) <= min_tx_space(self->port))) {
+        on_wire_bytes(self, min_id & (uint8_t) 0x3fU, 0, payload, 0, 0xffffU, payload_len);
+    }
 }

@@ -26,8 +26,11 @@ class MINConnectionError(Exception):
 
 
 class MINFrame:
-    def __init__(self, min_id: int, payload: bytes, seq: int, transport: bool):
-        self.min_id = min_id & 0x3f
+    def __init__(self, min_id: int, payload: bytes, seq: int, transport: bool, ack_or_reset=False):
+        if ack_or_reset:
+            self.min_id = min_id
+        else:
+            self.min_id = min_id & 0x3f
         self.payload = payload
         self.seq = seq
         self.is_transport = transport
@@ -74,7 +77,7 @@ class MINTransport:
     RECEIVING_CHECKSUM_0 = 8
     RECEIVING_EOF = 9
 
-    def __init__(self, window_size=16, transport_fifo_size=100, idle_timeout_ms=500, ack_retransmit_timeout_ms=10, frame_retransmit_timeout_ms=10, debug=False):
+    def __init__(self, window_size=16, transport_fifo_size=100, idle_timeout_ms=2000, ack_retransmit_timeout_ms=10, frame_retransmit_timeout_ms=10, debug=False):
         """
         :param window_size: Number of outstanding unacknowledged frames permitted
         :param transport_fifo_size: Maximum number of outstanding frames
@@ -141,9 +144,7 @@ class MINTransport:
         self._serial_write(on_wire_bytes)
 
     def _send_ack(self):
-        if self._debug:
-            print("Sending ACK, seq={}".format(self._rn))
-        ack_frame = MINFrame(min_id=self.ACK, seq=self._rn, payload=bytes(), transport=True)
+        ack_frame = MINFrame(min_id=self.ACK, seq=self._rn, payload=bytes(), transport=True, ack_or_reset=True)
         on_wire_bytes = self._on_wire_bytes(frame=ack_frame)
         self._last_sent_ack_time_ms = self._now_ms()
         self._serial_write(on_wire_bytes)
@@ -151,7 +152,7 @@ class MINTransport:
     def _send_reset(self):
         if self._debug:
             print("Sending RESET")
-        reset_frame = MINFrame(min_id=self.RESET, seq=0, payload=bytes(), transport=True)
+        reset_frame = MINFrame(min_id=self.RESET, seq=0, payload=bytes(), transport=True, ack_or_reset=True)
         on_wire_bytes = self._on_wire_bytes(frame=reset_frame)
         self._serial_write(on_wire_bytes)
 
@@ -210,12 +211,8 @@ class MINTransport:
 
     def _min_frame_received(self, min_id_control: int, min_payload: bytes, min_seq: int):
         self._last_received_anything_ms = self._now_ms()
-        if self._debug:
-            print("MIN frame received (min_id_control={:02x})".format(self._rx_frame_id_control))
         if min_id_control & 0x80:
             if min_id_control == self.ACK:
-                if self._debug:
-                    print("ACK received, seq={}".format(min_seq))
                 # The ACK number indicates the serial number of the next packet wanted, so any previous packets can be marked off
                 number_acked = (min_seq - self._sn_min) & 0xff
                 number_in_window = (self._sn_max - self._sn_min) & 0xff
@@ -241,16 +238,18 @@ class MINTransport:
                 self._transport_fifo_reset()
             else:
                 # MIN frame received
+                self._last_received_frame_ms = self._now_ms()
                 if min_seq == self._rn:
                     # The next frame in the sequence we are looking for
                     self._rn = (self._rn + 1) & 0xff
                     self._send_ack()
-                    self._last_received_frame_ms = self._now_ms()
                     min_frame = MINFrame(min_id=min_id_control, payload=min_payload, seq=min_seq, transport=True)
                     if self._debug:
                         print("MIN frame received (min_id={:02x})".format(min_id_control))
                     self._rx_list.append(min_frame)
                 else:
+                    if self._debug:
+                        print("MIN frame discarded (min_id={:02x}, seq={:02x})".format(min_id_control, min_seq))
                     # Discarding because sequence number mismatch
                     self._sequence_mismatch_drops += 1
         else:
@@ -318,8 +317,14 @@ class MINTransport:
                 self._rx_frame_state = self.RECEIVING_CHECKSUM_0
             elif self._rx_frame_state == self.RECEIVING_CHECKSUM_0:
                 self._rx_frame_checksum |= byte
-                computed_checksum = self._crc32(bytearray([self._rx_frame_id_control, self._rx_frame_seq, self._rx_control]) + self._rx_frame_buf)
+                if self._rx_frame_id_control & 0x80:
+                    computed_checksum = self._crc32(bytearray([self._rx_frame_id_control, self._rx_frame_seq, self._rx_control]) + self._rx_frame_buf)
+                else:
+                    computed_checksum = self._crc32(bytearray([self._rx_frame_id_control, self._rx_control]) + self._rx_frame_buf)
+
                 if self._rx_frame_checksum != computed_checksum:
+                    if self._debug:
+                        print("CRC mismatch (0x{:08x} vs 0x{:08x}), frame dropped".format(self._rx_frame_checksum, computed_checksum))
                     # Frame fails checksum, is dropped
                     self._rx_frame_state = self.SEARCHING_FOR_SOF
                 else:
@@ -329,10 +334,15 @@ class MINTransport:
                 if byte == self.EOF_BYTE:
                     # Frame received OK, pass up frame for handling
                     self._min_frame_received(min_id_control=self._rx_frame_id_control, min_payload=bytes(self._rx_frame_buf), min_seq=self._rx_frame_seq)
+                else:
+                    if self._debug:
+                        print("No EOF received, dropping frame")
 
                 # Look for next frame
                 self._rx_frame_state = self.SEARCHING_FOR_SOF
             else:
+                if self._debug:
+                    print("Unexpected state, state machine reset")
                 # Should never get here but in case we do just reset
                 self._rx_frame_state = self.SEARCHING_FOR_SOF
 
@@ -367,8 +377,19 @@ class MINTransport:
         return bytes(stuffed)
 
     @staticmethod
-    def _crc32(checksummed_data):
-        return crc32(checksummed_data)
+    def _crc32(checksummed_data: bytearray, start=0xffffffff):
+        crc = start
+        for byte in checksummed_data:
+            crc ^= byte
+            for j in range(8):
+                mask = -(crc & 1)
+                crc = (crc >> 1) ^ (0xedb88320 & mask)
+        checksum = ~crc % (1 << 32)
+
+        if checksum != crc32(checksummed_data, 0):
+            raise AssertionError("CRC algorithm mismatch")
+
+        return checksum
 
     def transport_stats(self):
         """
@@ -464,7 +485,7 @@ class MINTransportSerial(MINTransport):
     def _serial_close(self):
         self._serial.close()
 
-    def __init__(self, port, debug=True):
+    def __init__(self, port, debug=False):
         """
         Open MIN connection on a given port.
         :param port: serial port
