@@ -5,12 +5,16 @@ Author: Ken Tindell
 Copyright (c) 2014-2017 JK Energy Ltd.
 Licensed under MIT License.
 """
-
+from random import randrange
 from struct import pack
 from binascii import crc32
 from threading import Lock
 from serial import Serial, SerialException
 from time import time
+from logging import getLogger, ERROR, FileHandler
+
+
+min_logger = getLogger('min')
 
 
 def int32_to_bytes(value: int) -> bytes:
@@ -77,7 +81,7 @@ class MINTransport:
     RECEIVING_CHECKSUM_0 = 8
     RECEIVING_EOF = 9
 
-    def __init__(self, window_size=16, transport_fifo_size=100, idle_timeout_ms=2000, ack_retransmit_timeout_ms=10, frame_retransmit_timeout_ms=10, debug=False):
+    def __init__(self, window_size=8, transport_fifo_size=100, idle_timeout_ms=3000, ack_retransmit_timeout_ms=25, frame_retransmit_timeout_ms=50, loglevel=ERROR):
         """
         :param window_size: Number of outstanding unacknowledged frames permitted
         :param transport_fifo_size: Maximum number of outstanding frames
@@ -86,12 +90,13 @@ class MINTransport:
         :param frame_retransmit_timeout_ms: Time before frames are resent
         :param debug:
         """
-        self._debug = debug
         self._transport_fifo_size = transport_fifo_size
         self._ack_retransmit_timeout_ms = ack_retransmit_timeout_ms
         self._max_window_size = window_size
         self._idle_timeout_ms = idle_timeout_ms
         self._frame_retransmit_timeout_ms = frame_retransmit_timeout_ms
+
+        min_logger.setLevel(level=loglevel)
 
         # Stats about the link
         self._longest_transport_fifo = 0
@@ -128,7 +133,7 @@ class MINTransport:
         self._sn_min = 0
         self._sn_max = 0
 
-        self._transport_reset()
+        self._transport_fifo_reset()
 
     def _transport_fifo_pop(self):
         assert len(self._transport_fifo) > 0
@@ -147,11 +152,11 @@ class MINTransport:
         ack_frame = MINFrame(min_id=self.ACK, seq=self._rn, payload=bytes(), transport=True, ack_or_reset=True)
         on_wire_bytes = self._on_wire_bytes(frame=ack_frame)
         self._last_sent_ack_time_ms = self._now_ms()
+        min_logger.debug("Sending ACK, seq={}".format(ack_frame.seq))
         self._serial_write(on_wire_bytes)
 
     def _send_reset(self):
-        if self._debug:
-            print("Sending RESET")
+        min_logger.debug("Sending RESET")
         reset_frame = MINFrame(min_id=self.RESET, seq=0, payload=bytes(), transport=True, ack_or_reset=True)
         on_wire_bytes = self._on_wire_bytes(frame=reset_frame)
         self._serial_write(on_wire_bytes)
@@ -165,7 +170,11 @@ class MINTransport:
         self._sn_min = 0
         self._sn_max = 0
 
-    def _transport_reset(self):
+    def transport_reset(self):
+        """
+        Sends a RESET to the other side to say that we are going away and clears out the FIFO
+        :return: 
+        """
         self._send_reset()
         self._send_reset()
 
@@ -184,8 +193,8 @@ class MINTransport:
             raise ValueError("MIN ID out of range")
         frame = MINFrame(min_id=min_id, payload=payload, transport=False, seq=0)
         on_wire_bytes = self._on_wire_bytes(frame=frame)
-        if self._debug:
-            print("Sending MIN frame, on wire bytes={}".format(bytes_to_hexstr(on_wire_bytes)))
+        min_logger.info("Sending MIN frame, min_id={}, payload={}".format(min_id, bytes_to_hexstr(payload)))
+        min_logger.debug("Sending MIN frame, on wire bytes={}".format(bytes_to_hexstr(on_wire_bytes)))
         self._serial_write(on_wire_bytes)
 
     def queue_frame(self, min_id: int, payload: bytes):
@@ -203,6 +212,7 @@ class MINTransport:
             raise ValueError("MIN ID out of range")
         # Frame put into the transport FIFO
         if len(self._transport_fifo) < self._transport_fifo_size:
+            min_logger.info("Queueing min_id={}".format(min_id))
             frame = MINFrame(min_id=min_id, payload=payload, seq=self._sn_max, transport=True)
             self._transport_fifo.append(frame)
         else:
@@ -210,14 +220,17 @@ class MINTransport:
             raise MINConnectionError("No space in transport FIFO queue")
 
     def _min_frame_received(self, min_id_control: int, min_payload: bytes, min_seq: int):
+        min_logger.debug("MIN frame received: min_id_control=0x{:02x}, min_seq={}".format(min_id_control, min_seq))
         self._last_received_anything_ms = self._now_ms()
         if min_id_control & 0x80:
             if min_id_control == self.ACK:
+                min_logger.debug("Received ACK")
                 # The ACK number indicates the serial number of the next packet wanted, so any previous packets can be marked off
                 number_acked = (min_seq - self._sn_min) & 0xff
                 number_in_window = (self._sn_max - self._sn_min) & 0xff
                 # Need to guard against old ACKs from an old session still turning up
                 if number_acked <= number_in_window:
+                    min_logger.debug("Number ACKed = {}".format(number_acked))
                     self._sn_min = min_seq
 
                     assert len(self._transport_fifo) >= number_in_window
@@ -230,10 +243,10 @@ class MINTransport:
                     for i in range(number_acked):
                         self._transport_fifo_pop()
                 else:
+                    min_logger.warning("Spurious ACK")
                     self._spurious_acks += 1
             elif min_id_control == self.RESET:
-                if self._debug:
-                    print("RESET received".format(min_seq))
+                min_logger.debug("RESET received".format(min_seq))
                 self._resets_received += 1
                 self._transport_fifo_reset()
             else:
@@ -242,14 +255,13 @@ class MINTransport:
                 if min_seq == self._rn:
                     # The next frame in the sequence we are looking for
                     self._rn = (self._rn + 1) & 0xff
+                    min_logger.debug("Sending ACK for min ID={} with seq={}".format(min_id_control & 0x3f, min_seq))
                     self._send_ack()
                     min_frame = MINFrame(min_id=min_id_control, payload=min_payload, seq=min_seq, transport=True)
-                    if self._debug:
-                        print("MIN frame received (min_id={:02x})".format(min_id_control))
+                    min_logger.info("MIN application frame received (min_id={} seq={})".format(min_id_control & 0x3f, min_seq))
                     self._rx_list.append(min_frame)
                 else:
-                    if self._debug:
-                        print("MIN frame discarded (min_id={:02x}, seq={:02x})".format(min_id_control, min_seq))
+                    min_logger.warning("MIN application frame discarded (min_id={}, seq={})".format(min_id_control & 0x3f, min_seq))
                     # Discarding because sequence number mismatch
                     self._sequence_mismatch_drops += 1
         else:
@@ -261,8 +273,7 @@ class MINTransport:
         Called by handler to pass over a sequence of bytes
         :param data:
         """
-        if self._debug:
-            print("Received bytes: {}".format(bytes_to_hexstr(data)))
+        min_logger.debug("Received bytes: {}".format(bytes_to_hexstr(data)))
         for byte in data:
             if self._rx_header_bytes_seen == 2:
                 self._rx_header_bytes_seen = 0
@@ -323,8 +334,7 @@ class MINTransport:
                     computed_checksum = self._crc32(bytearray([self._rx_frame_id_control, self._rx_control]) + self._rx_frame_buf)
 
                 if self._rx_frame_checksum != computed_checksum:
-                    if self._debug:
-                        print("CRC mismatch (0x{:08x} vs 0x{:08x}), frame dropped".format(self._rx_frame_checksum, computed_checksum))
+                    min_logger.warning("CRC mismatch (0x{:08x} vs 0x{:08x}), frame dropped".format(self._rx_frame_checksum, computed_checksum))
                     # Frame fails checksum, is dropped
                     self._rx_frame_state = self.SEARCHING_FOR_SOF
                 else:
@@ -332,17 +342,15 @@ class MINTransport:
                     self._rx_frame_state = self.RECEIVING_EOF
             elif self._rx_frame_state == self.RECEIVING_EOF:
                 if byte == self.EOF_BYTE:
-                    # Frame received OK, pass up frame for handling
+                    # Frame received OK, pass up frame for handling")
                     self._min_frame_received(min_id_control=self._rx_frame_id_control, min_payload=bytes(self._rx_frame_buf), min_seq=self._rx_frame_seq)
                 else:
-                    if self._debug:
-                        print("No EOF received, dropping frame")
+                    min_logger.warning("No EOF received, dropping frame")
 
                 # Look for next frame
                 self._rx_frame_state = self.SEARCHING_FOR_SOF
             else:
-                if self._debug:
-                    print("Unexpected state, state machine reset")
+                min_logger.error("Unexpected state, state machine reset")
                 # Should never get here but in case we do just reset
                 self._rx_frame_state = self.SEARCHING_FOR_SOF
 
@@ -442,6 +450,7 @@ class MINTransport:
             frame.seq = self._sn_max
             self._last_sent_frame_ms = self._now_ms()
             frame.last_sent_time = self._now_ms()
+            min_logger.info("Sending new frame id={} seq={}".format(frame.min_id, frame.seq))
             self._transport_fifo_send(frame=frame)
             self._sn_max = (self._sn_max + 1) & 0xff
         else:
@@ -449,11 +458,13 @@ class MINTransport:
             if window_size > 0 and remote_connected:
                 oldest_frame = self._find_oldest_frame()
                 if self._now_ms() - oldest_frame.last_sent_time > self._frame_retransmit_timeout_ms:
+                    min_logger.debug("Resending old frame id={} seq={}".format(oldest_frame.min_id, oldest_frame.seq))
                     self._transport_fifo_send(frame=oldest_frame)
 
         # Periodically transmit ACK
         if self._now_ms() - self._last_sent_ack_time_ms > self._ack_retransmit_timeout_ms:
             if remote_active:
+                min_logger.debug("Periodic send of ACK")
                 self._send_ack()
 
         if (self._sn_max - self._sn_max) & 0xff > window_size:
@@ -469,34 +480,54 @@ class MINTransportSerial(MINTransport):
     """
     Bound to Pyserial driver. But not thread safe: must not call poll() and send() at the same time.
     """
+    def _corrupted_data(self, data):
+        """
+        Randomly perturb a bit in one in 1000 bytes
+        :param data: 
+        :return: 
+        """
+        corrupted_data = []
+        for byte in data:
+            if randrange(1000) == 0:
+                byte ^= (1 << randrange(8))
+            corrupted_data.append(byte)
+        return bytes(corrupted_data)
+
     def _now_ms(self):
         now = int(time() * 1000.0)
         return now
 
     def _serial_write(self, data):
+        if self.fake_errors:
+            data = self._corrupted_data(data)
         self._serial.write(data)
 
     def _serial_any(self):
         return self._serial.in_waiting > 0
 
     def _serial_read_all(self):
-        return self._serial.read_all()
+        data = self._serial.read_all()
+        if self.fake_errors:
+            data = self._corrupted_data(data)
+        return data
 
     def _serial_close(self):
         self._serial.close()
 
-    def __init__(self, port, debug=False):
+    def __init__(self, port, loglevel=ERROR):
         """
         Open MIN connection on a given port.
         :param port: serial port
         :param debug:
         """
+        self.fake_errors = False
         try:
-            self._serial = Serial(port=port, timeout=0.1, write_timeout=None)
-            self._serial.read(1000)  # Flush any stale input away (well, most of it)
+            self._serial = Serial(port=port, timeout=0.1, write_timeout=1.0)
+            self._serial.reset_input_buffer()
+            self._serial.reset_output_buffer()
         except SerialException:
             raise MINConnectionError("Transport MIN cannot open port '{}'".format(port))
-        super().__init__(debug=debug)
+        super().__init__(loglevel=loglevel)
 
 
 class ThreadsafeTransportMINSerialHandler(MINTransportSerial):
@@ -506,8 +537,8 @@ class ThreadsafeTransportMINSerialHandler(MINTransportSerial):
     A typical usage is to create a simple thread that calls poll() in a loop which takes MIN frames received and puts them into a Python queue.
     The application can send directly and pick up incoming frames from the queue.
     """
-    def __init__(self, port, debug=False):
-        super().__init__(port=port, debug=debug)
+    def __init__(self, port, loglevel=ERROR):
+        super().__init__(port=port, loglevel=loglevel)
         self._thread_lock = Lock()
 
     def close(self):

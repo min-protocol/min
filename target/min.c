@@ -34,10 +34,10 @@ enum {
 
 #ifdef TRANSPORT_PROTOCOL
 
-#define TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS         (5U)
-#define TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS       (5U)
+#define TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS         (25U)
+#define TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS       (50U)
 #define TRANSPORT_MAX_WINDOW_SIZE                   (4U)
-#define TRANSPORT_IDLE_TIMEOUT_MS                   (2000U)
+#define TRANSPORT_IDLE_TIMEOUT_MS                   (3000U)
 
 enum {
     // Top bit must be set: these are for the transport protocol to use
@@ -141,6 +141,7 @@ static void transport_fifo_pop(struct min_context *self)
     assert(n_frames != 0);
 #endif
     struct transport_frame *frame = &self->transport_fifo.frames[self->transport_fifo.head_idx];
+    min_debug_print("Popping frame id=%d seq=%d\n", frame->min_id, frame->seq);
 
 #ifdef ASSERTION_CHECKING
     assert(self->transport_fifo.n_ring_buffer_bytes >= frame->payload_len);
@@ -183,6 +184,12 @@ static struct transport_frame *transport_fifo_push(struct min_context *self, uin
             self->transport_fifo.tail_idx++;
             self->transport_fifo.tail_idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
         }
+        else {
+            min_debug_print("No FIFO payload space: data_size=%d, n_ring_buffer_bytes=%d\n", data_size, self->transport_fifo.n_ring_buffer_bytes);
+        }
+    }
+    else {
+        min_debug_print("No FIFO frame slots\n");
     }
     return ret;
 }
@@ -197,6 +204,7 @@ static struct transport_frame *transport_fifo_get(struct min_context *self, uint
 // Sends the given frame to the serial line
 static void transport_fifo_send(struct min_context *self, struct transport_frame *frame)
 {
+    min_debug_print("transport_fifo_send: min_id=%d, seq=%d, payload_len=%d\n", frame->min_id, frame->seq, frame->payload_len);
     on_wire_bytes(self, frame->min_id | (uint8_t)0x80U, frame->seq, payloads_ring_buffer, frame->payload_offset, TRANSPORT_FIFO_SIZE_FRAME_DATA_MASK, frame->payload_len);
     frame->last_sent_time_ms = now;
 }
@@ -204,6 +212,7 @@ static void transport_fifo_send(struct min_context *self, struct transport_frame
 // We don't queue an ACK frame - we send it straight away (if there's space to do so)
 static void send_ack(struct min_context *self)
 {
+    min_debug_print("send ACK: seq=%d\n", self->transport_fifo.rn);
     if(ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
         on_wire_bytes(self, ACK, self->transport_fifo.rn, 0, 0, 0, 0);
         self->transport_fifo.last_sent_ack_time_ms = now;
@@ -213,6 +222,7 @@ static void send_ack(struct min_context *self)
 // We don't queue an RESET frame - we send it straight away (if there's space to do so)
 static void send_reset(struct min_context *self)
 {
+    min_debug_print("send RESET\n");
     if(ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
         on_wire_bytes(self, RESET, 0, 0, 0, 0, 0);
     }
@@ -236,7 +246,7 @@ static void transport_fifo_reset(struct min_context *self)
     self->transport_fifo.last_received_frame_ms = 0;
 }
 
-static void transport_reset(struct min_context *self)
+void min_transport_reset(struct min_context *self)
 {
     // Tell the other end we have gone away
     send_reset(self);
@@ -264,6 +274,7 @@ bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t *payload,
             payload_offset++;
             payload_offset &= TRANSPORT_FIFO_SIZE_FRAME_DATA_MASK;
         }
+        min_debug_print("Queued ID=%d, len=%d\n", min_id, payload_len);
         return true;
     }
     else {
@@ -321,8 +332,6 @@ static void valid_frame_received(struct min_context *self)
         case ACK:
             // If we get an ACK then we remove all the acknowledged frames with seq < rn
             // But we need to make sure we don't accidentally ACK too many because of a stale ACK from an old session
-
-
             num_acked = seq - self->transport_fifo.sn_min;
             num_in_window = self->transport_fifo.sn_max - self->transport_fifo.sn_min;
 
@@ -335,11 +344,13 @@ static void valid_frame_received(struct min_context *self)
 #endif
                 // Now pop off all the frames up to (but not including) rn
                 // The ACK contains Rn; all frames before Rn are ACKed and can be removed from the window
+                min_debug_print("Received ACK seq=%d, num_acked=%d\n", seq, num_acked);
                 for(uint8_t i = 0; i < num_acked; i++) {
                     transport_fifo_pop(self);
                 }
             }
             else {
+                min_debug_print("Received spurious ACK\n");
                 self->transport_fifo.spurious_acks++;
             }
             break;
@@ -374,6 +385,7 @@ static void valid_frame_received(struct min_context *self)
                     // Now ready to pass this up to the application handlers
 
                     // Pass frame up to application handler to deal with
+                    min_debug_print("Incoming app frame seq=%d, id=%d, payload len=%d\n", seq, id_control & (uint8_t)0x3fU, payload_len);
                     min_application_handler(id_control & (uint8_t)0x3fU, payload, payload_len, self->port);
                 } else {
                     // Discard this frame because we aren't looking for it: it's either a dupe because it was
@@ -582,8 +594,7 @@ void min_init_context(struct min_context *self, uint8_t port)
     self->transport_fifo.resets_received = 0;
     self->transport_fifo.n_ring_buffer_bytes_max = 0;
     self->transport_fifo.n_frames_max = 0;
-    // Reset the other end so that any old cruft is discarded
-    transport_reset(self);
+    transport_fifo_reset(self);
 #endif
 }
 

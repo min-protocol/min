@@ -75,12 +75,12 @@
 #define MAX_PAYLOAD                                 (255U)
 #endif
 
-// Powers of two for FIFO management. Default is 16 frames in the FIFO, total of 512 bytes for frame data
+// Powers of two for FIFO management. Default is 16 frames in the FIFO, total of 1024 bytes for frame data
 #ifndef TRANSPORT_FIFO_SIZE_FRAMES_BITS
 #define TRANSPORT_FIFO_SIZE_FRAMES_BITS             (4U)
 #endif
 #ifndef TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS
-#define TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS         (9U)
+#define TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS         (10U)
 #endif
 
 #define TRANSPORT_FIFO_MAX_FRAMES                   (1U << TRANSPORT_FIFO_SIZE_FRAMES_BITS)
@@ -168,6 +168,9 @@ void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t *payload, 
 // this call must still be made in order to drive the state machine for retransmits.
 void min_poll(struct min_context *self, uint8_t *buf, uint32_t buf_len);
 
+// Reset the state machine and tell the other side that we have done so
+void min_transport_reset(struct min_context *self);
+
 // CALLBACK. Handle incoming MIN frame
 void min_application_handler(uint8_t min_id, uint8_t *min_payload, uint8_t len_payload, uint8_t port);
 
@@ -187,5 +190,12 @@ void min_tx_byte(uint8_t port, uint8_t byte);
 // Initialize a MIN context ready for receiving bytes from a serial link
 // (Can have multiple MIN contexts)
 void min_init_context(struct min_context *self, uint8_t port);
+
+#ifdef DEBUG_PRINTING
+// Debug print
+void min_debug_print(const char *msg, ...);
+#else
+#define min_debug_print(args...)
+#endif
 
 #endif //MIN_H

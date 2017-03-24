@@ -4,7 +4,7 @@ Simple example program that sends a MIN frame and displays all received MIN fram
 from struct import unpack
 from time import sleep, time
 
-from min import MINTransportSerial, bytes_to_hexstr
+from min import MINTransportSerial
 
 # Linux USB serial ports are of the form '/dev/ttyACM*'
 # macOS USB serial ports are of the form '/dev/tty.usbmodem*'
@@ -36,7 +36,7 @@ if __name__ == "__main__":
     # One approach to autodiscovering a port with a MIN device on the other end is to open
     # all the ports on the machine and listen for a heartbeat: the chances of random data
     # appearing as a valid MIN frame with a magic number in the payload are virtually zero.
-    min_handler = MINTransportSerial(port=MIN_PORT, debug=False)
+    min_handler = MINTransportSerial(port=MIN_PORT)
 
     min_id = 0x01
     while True:
