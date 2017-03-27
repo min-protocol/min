@@ -463,7 +463,6 @@ class MINTransport:
 
         # Periodically transmit ACK
         if self._now_ms() - self._last_sent_ack_time_ms > self.ack_retransmit_timeout_ms:
-            print("now={}, last sent ack time = {}, timeout retransmit = {}".format(self._now_ms(), self._last_sent_ack_time_ms, self.ack_retransmit_timeout_ms))
             if remote_active:
                 min_logger.debug("Periodic send of ACK")
                 self._send_ack()
@@ -544,29 +543,49 @@ class ThreadsafeTransportMINSerialHandler(MINTransportSerial):
 
     def close(self):
         self._thread_lock.acquire()
-        super().close()
+        try:
+            super().close()
+        except Exception as e:
+            self._thread_lock.release()
+            raise e
         self._thread_lock.release()
 
     def transport_stats(self):
         self._thread_lock.acquire()
-        result = super().transport_stats()
+        try:
+            result = super().transport_stats()
+        except Exception as e:
+            self._thread_lock.release()
+            raise e
         self._thread_lock.release()
 
         return result
 
     def send_frame(self, min_id: int, payload: bytes):
         self._thread_lock.acquire()
-        super().send_frame(min_id=min_id, payload=payload)
+        try:
+            super().send_frame(min_id=min_id, payload=payload)
+        except Exception as e:
+            self._thread_lock.release()
+            raise e
         self._thread_lock.release()
 
     def queue_frame(self, min_id: int, payload: bytes):
         self._thread_lock.acquire()
-        super().queue_frame(min_id=min_id, payload=payload)
+        try:
+            super().queue_frame(min_id=min_id, payload=payload)
+        except Exception as e:
+            self._thread_lock.release()
+            raise e
         self._thread_lock.release()
 
     def poll(self):
         self._thread_lock.acquire()
-        result = super().poll()
+        try:
+            result = super().poll()
+        except Exception as e:
+            self._thread_lock.release()
+            raise e
         self._thread_lock.release()
 
         return result
