@@ -90,11 +90,11 @@ class MINTransport:
         :param frame_retransmit_timeout_ms: Time before frames are resent
         :param debug:
         """
-        self._transport_fifo_size = transport_fifo_size
-        self._ack_retransmit_timeout_ms = ack_retransmit_timeout_ms
-        self._max_window_size = window_size
-        self._idle_timeout_ms = idle_timeout_ms
-        self._frame_retransmit_timeout_ms = frame_retransmit_timeout_ms
+        self.transport_fifo_size = transport_fifo_size
+        self.ack_retransmit_timeout_ms = ack_retransmit_timeout_ms
+        self.max_window_size = window_size
+        self.idle_timeout_ms = idle_timeout_ms
+        self.frame_retransmit_timeout_ms = frame_retransmit_timeout_ms
 
         min_logger.setLevel(level=loglevel)
 
@@ -211,7 +211,7 @@ class MINTransport:
         if min_id not in range(64):
             raise ValueError("MIN ID out of range")
         # Frame put into the transport FIFO
-        if len(self._transport_fifo) < self._transport_fifo_size:
+        if len(self._transport_fifo) < self.transport_fifo_size:
             min_logger.info("Queueing min_id={}".format(min_id))
             frame = MINFrame(min_id=min_id, payload=payload, seq=self._sn_max, transport=True)
             self._transport_fifo.append(frame)
@@ -234,7 +234,7 @@ class MINTransport:
                     self._sn_min = min_seq
 
                     assert len(self._transport_fifo) >= number_in_window
-                    assert number_in_window <= self._max_window_size
+                    assert number_in_window <= self.max_window_size
 
                     new_number_in_window = (self._sn_max - self._sn_min) & 0xff
                     if new_number_in_window + number_acked != number_in_window:
@@ -434,8 +434,8 @@ class MINTransport:
 
         :return: array of accepted MIN frames
         """
-        remote_connected = (self._now_ms() - self._last_received_anything_ms) < self._idle_timeout_ms
-        remote_active = (self._now_ms() - self._last_received_frame_ms) < self._idle_timeout_ms
+        remote_connected = (self._now_ms() - self._last_received_anything_ms) < self.idle_timeout_ms
+        remote_active = (self._now_ms() - self._last_received_frame_ms) < self.idle_timeout_ms
 
         self._rx_list = []
 
@@ -444,7 +444,7 @@ class MINTransport:
             self._rx_bytes(data=data)
 
         window_size = (self._sn_max - self._sn_min) & 0xff
-        if window_size < self._max_window_size and len(self._transport_fifo) > window_size:
+        if window_size < self.max_window_size and len(self._transport_fifo) > window_size:
             # Frames still to send
             frame = self._transport_fifo_get(n=window_size)
             frame.seq = self._sn_max
@@ -457,12 +457,13 @@ class MINTransport:
             # Maybe retransmits
             if window_size > 0 and remote_connected:
                 oldest_frame = self._find_oldest_frame()
-                if self._now_ms() - oldest_frame.last_sent_time > self._frame_retransmit_timeout_ms:
+                if self._now_ms() - oldest_frame.last_sent_time > self.frame_retransmit_timeout_ms:
                     min_logger.debug("Resending old frame id={} seq={}".format(oldest_frame.min_id, oldest_frame.seq))
                     self._transport_fifo_send(frame=oldest_frame)
 
         # Periodically transmit ACK
-        if self._now_ms() - self._last_sent_ack_time_ms > self._ack_retransmit_timeout_ms:
+        if self._now_ms() - self._last_sent_ack_time_ms > self.ack_retransmit_timeout_ms:
+            print("now={}, last sent ack time = {}, timeout retransmit = {}".format(self._now_ms(), self._last_sent_ack_time_ms, self.ack_retransmit_timeout_ms))
             if remote_active:
                 min_logger.debug("Periodic send of ACK")
                 self._send_ack()
