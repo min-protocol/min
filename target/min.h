@@ -187,11 +187,15 @@ uint16_t min_tx_space(uint8_t port);
 // CALLBACK. Send a byte on the given line.
 void min_tx_byte(uint8_t port, uint8_t byte);
 
+// CALLBACK. Indcates when frame transmission is finished; useful for buffering bytes into a single serial call.
+void min_tx_start(uint8_t port);
+void min_tx_finished(uint8_t port);
+
 // Initialize a MIN context ready for receiving bytes from a serial link
 // (Can have multiple MIN contexts)
 void min_init_context(struct min_context *self, uint8_t port);
 
-#ifdef DEBUG_PRINTING
+#ifdef MIN_DEBUG_PRINTING
 // Debug print
 void min_debug_print(const char *msg, ...);
 #else

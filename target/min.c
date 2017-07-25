@@ -34,10 +34,18 @@ enum {
 
 #ifdef TRANSPORT_PROTOCOL
 
+#ifndef TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS
 #define TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS         (25U)
-#define TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS       (50U)
-#define TRANSPORT_MAX_WINDOW_SIZE                   (4U)
-#define TRANSPORT_IDLE_TIMEOUT_MS                   (3000U)
+#endif
+#ifndef TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS
+#define TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS       (50U) // Should be long enough for a whole window to be transmitted plus an ACK / NACK to get back
+#endif
+#ifndef TRANSPORT_MAX_WINDOW_SIZE
+#define TRANSPORT_MAX_WINDOW_SIZE                   (16U)
+#endif
+#ifndef TRANSPORT_IDLE_TIMEOUT_MS
+#define TRANSPORT_IDLE_TIMEOUT_MS                   (1000U)
+#endif
 
 enum {
     // Top bit must be set: these are for the transport protocol to use
@@ -99,6 +107,8 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
     self->tx_header_byte_countdown = 2U;
     crc32_init_context(&self->tx_checksum);
 
+    min_tx_start(self->port);
+
     // Header is 3 bytes; because unstuffed will reset receiver immediately
     min_tx_byte(self->port, HEADER_BYTE);
     min_tx_byte(self->port, HEADER_BYTE);
@@ -129,6 +139,8 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
 
     // Ensure end-of-frame doesn't contain 0xaa and confuse search for start-of-frame
     min_tx_byte(self->port, EOF_BYTE);
+
+    min_tx_finished(self->port);
 }
 
 #ifdef TRANSPORT_PROTOCOL
@@ -137,7 +149,6 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
 static void transport_fifo_pop(struct min_context *self)
 {
 #ifdef ASSERTION_CHECKING
-    uint32_t n_frames = self->transport_fifo.n_frames;
     assert(n_frames != 0);
 #endif
     struct transport_frame *frame = &self->transport_fifo.frames[self->transport_fifo.head_idx];
@@ -212,9 +223,11 @@ static void transport_fifo_send(struct min_context *self, struct transport_frame
 // We don't queue an ACK frame - we send it straight away (if there's space to do so)
 static void send_ack(struct min_context *self)
 {
+    // In the embedded end we don't reassemble out-of-order frames and so never ask for retransmits. Payload is
+    // always the same as the sequence number.
     min_debug_print("send ACK: seq=%d\n", self->transport_fifo.rn);
     if(ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
-        on_wire_bytes(self, ACK, self->transport_fifo.rn, 0, 0, 0, 0);
+        on_wire_bytes(self, ACK, self->transport_fifo.rn, &self->transport_fifo.rn, 0, 0xffffU, 1U);
         self->transport_fifo.last_sent_ack_time_ms = now;
     }
 }
@@ -323,6 +336,7 @@ static void valid_frame_received(struct min_context *self)
 #ifdef TRANSPORT_PROTOCOL
     uint8_t seq = self->rx_frame_seq;
     uint8_t num_acked;
+    uint8_t num_nacked;
     uint8_t num_in_window;
 
     // When we receive anything we know the other end is still active and won't shut down
@@ -331,26 +345,37 @@ static void valid_frame_received(struct min_context *self)
     switch(id_control) {
         case ACK:
             // If we get an ACK then we remove all the acknowledged frames with seq < rn
+            // The payload byte specifies the number of NACKed frames: how many we want retransmitted because
+            // they have gone missing.
             // But we need to make sure we don't accidentally ACK too many because of a stale ACK from an old session
             num_acked = seq - self->transport_fifo.sn_min;
+            num_nacked = payload[0] - seq;
             num_in_window = self->transport_fifo.sn_max - self->transport_fifo.sn_min;
 
             if(num_acked <= num_in_window) {
                 self->transport_fifo.sn_min = seq;
-
 #ifdef ASSERTION_CHECKING
                 assert(self->transport_fifo.n_frames >= num_in_window);
                 assert(num_in_window <= TRANSPORT_MAX_WINDOW_SIZE);
+                assert(num_nacked <= TRANSPORT_MAX_WINDOW_SIZE);
 #endif
                 // Now pop off all the frames up to (but not including) rn
                 // The ACK contains Rn; all frames before Rn are ACKed and can be removed from the window
-                min_debug_print("Received ACK seq=%d, num_acked=%d\n", seq, num_acked);
+                min_debug_print("Received ACK seq=%d, num_acked=%d, num_nacked=%d\n", seq, num_acked, num_nacked);
                 for(uint8_t i = 0; i < num_acked; i++) {
                     transport_fifo_pop(self);
                 }
+                uint8_t idx = self->transport_fifo.head_idx;
+                // Now retransmit the number of frames that were requested
+                for(uint8_t i = 0; i < num_nacked; i++) {
+                    struct transport_frame *retransmit_frame = &self->transport_fifo.frames[idx];
+                    transport_fifo_send(self, retransmit_frame);
+                    idx++;
+                    idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
+                }
             }
             else {
-                min_debug_print("Received spurious ACK\n");
+                min_debug_print("Received spurious ACK seq=%d\n", seq);
                 self->transport_fifo.spurious_acks++;
             }
             break;
