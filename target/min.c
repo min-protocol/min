@@ -259,10 +259,12 @@ static void transport_fifo_reset(struct min_context *self)
     self->transport_fifo.last_received_frame_ms = 0;
 }
 
-void min_transport_reset(struct min_context *self)
+void min_transport_reset(struct min_context *self, bool inform_other_side)
 {
-    // Tell the other end we have gone away
-    send_reset(self);
+    if (inform_other_side) {
+        // Tell the other end we have gone away
+        send_reset(self);
+    }
 
     // Throw our frames away
     transport_fifo_reset(self);
@@ -323,7 +325,7 @@ static struct transport_frame *find_retransmit_frame(struct min_context *self)
 
     return oldest_frame;
 }
-#endif
+#endif // TRANSPORT_PROTOCOL
 
 // This runs the receiving half of the transport protocol, acknowledging frames received, discarding
 // duplicates received, and handling RESET requests.
@@ -425,9 +427,9 @@ static void valid_frame_received(struct min_context *self)
             }
             break;
     }
-#else
+#else // TRANSPORT_PROTOCOL
     min_application_handler(id_control & (uint8_t)0x3fU, payload, payload_len);
-#endif
+#endif // TRANSPORT_PROTOCOL
 }
 
 static void rx_byte(struct min_context *self, uint8_t byte)
@@ -476,7 +478,7 @@ static void rx_byte(struct min_context *self, uint8_t byte)
 #else
                 // If there is no transport support compiled in then all transport frames are ignored
                 self->rx_frame_state = SEARCHING_FOR_SOF;
-#endif
+#endif // TRANSPORT_PROTOCOL
             }
             else {
                 self->rx_frame_seq = 0;
@@ -595,13 +597,15 @@ void min_poll(struct min_context *self, uint8_t *buf, uint32_t buf_len)
         }
     }
 
+#ifndef DISABLE_TRANSPORT_ACK_RETRANSMIT
     // Periodically transmit the ACK with the rn value, unless the line has gone idle
     if(now - self->transport_fifo.last_sent_ack_time_ms > TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS) {
         if(remote_active) {
             send_ack(self);
         }
     }
-#endif
+#endif // DISABLE_TRANSPORT_ACK_RETRANSMIT
+#endif // TRANSPORT_PROTOCOL
 }
 
 void min_init_context(struct min_context *self, uint8_t port)
@@ -620,7 +624,7 @@ void min_init_context(struct min_context *self, uint8_t port)
     self->transport_fifo.n_ring_buffer_bytes_max = 0;
     self->transport_fifo.n_frames_max = 0;
     transport_fifo_reset(self);
-#endif
+#endif // TRANSPORT_PROTOCOL
 }
 
 // Sends an application MIN frame on the wire (do not put into the transport queue)

@@ -168,8 +168,8 @@ void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t *payload, 
 // this call must still be made in order to drive the state machine for retransmits.
 void min_poll(struct min_context *self, uint8_t *buf, uint32_t buf_len);
 
-// Reset the state machine and tell the other side that we have done so
-void min_transport_reset(struct min_context *self);
+// Reset the state machine and (optionally) tell the other side that we have done so
+void min_transport_reset(struct min_context *self, bool inform_other_side);
 
 // CALLBACK. Handle incoming MIN frame
 void min_application_handler(uint8_t min_id, uint8_t *min_payload, uint8_t len_payload, uint8_t port);
@@ -199,7 +199,7 @@ void min_init_context(struct min_context *self, uint8_t port);
 // Debug print
 void min_debug_print(const char *msg, ...);
 #else
-#define min_debug_print(args...)
+#define min_debug_print(...)
 #endif
 
 #endif //MIN_H
