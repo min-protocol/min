@@ -227,7 +227,7 @@ static void send_ack(struct min_context *self)
     // always the same as the sequence number.
     min_debug_print("send ACK: seq=%d\n", self->transport_fifo.rn);
     if(ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
-        on_wire_bytes(self, ACK, self->transport_fifo.rn, &self->transport_fifo.rn, 0, 0xffffU, 1U);
+        on_wire_bytes(self, ACK, self->transport_fifo.rn, &self->transport_fifo.rn, 0, 0xffU, 1U);
         self->transport_fifo.last_sent_ack_time_ms = now;
     }
 }
