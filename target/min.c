@@ -149,7 +149,7 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
 static void transport_fifo_pop(struct min_context *self)
 {
 #ifdef ASSERTION_CHECKING
-    assert(n_frames != 0);
+    assert(self->transport_fifo.n_frames != 0);
 #endif
     struct transport_frame *frame = &self->transport_fifo.frames[self->transport_fifo.head_idx];
     min_debug_print("Popping frame id=%d seq=%d\n", frame->min_id, frame->seq);
