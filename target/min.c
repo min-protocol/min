@@ -149,7 +149,7 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
 static void transport_fifo_pop(struct min_context *self)
 {
 #ifdef ASSERTION_CHECKING
-    assert(n_frames != 0);
+    assert(self->transport_fifo.n_frames != 0);
 #endif
     struct transport_frame *frame = &self->transport_fifo.frames[self->transport_fifo.head_idx];
     min_debug_print("Popping frame id=%d seq=%d\n", frame->min_id, frame->seq);
@@ -227,7 +227,7 @@ static void send_ack(struct min_context *self)
     // always the same as the sequence number.
     min_debug_print("send ACK: seq=%d\n", self->transport_fifo.rn);
     if(ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
-        on_wire_bytes(self, ACK, self->transport_fifo.rn, &self->transport_fifo.rn, 0, 0xffffU, 1U);
+        on_wire_bytes(self, ACK, self->transport_fifo.rn, &self->transport_fifo.rn, 0, 0xffU, 1U);
         self->transport_fifo.last_sent_ack_time_ms = now;
     }
 }
