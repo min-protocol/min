@@ -575,7 +575,7 @@ void min_poll(struct min_context *self, uint8_t *buf, uint32_t buf_len)
     if((window_size < TRANSPORT_MAX_WINDOW_SIZE) && (self->transport_fifo.n_frames > window_size)) {
         // There are new frames we can send; but don't even bother if there's no buffer space for them
         struct transport_frame *frame = transport_fifo_get(self, window_size);
-        if(ON_WIRE_SIZE(frame->payload_len) < min_tx_space(self->port)) {
+        if(ON_WIRE_SIZE(frame->payload_len) <= min_tx_space(self->port)) {
             frame->seq = self->transport_fifo.sn_max;
             transport_fifo_send(self, frame);
 
