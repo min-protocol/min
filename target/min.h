@@ -158,6 +158,9 @@ struct min_context {
 #ifdef TRANSPORT_PROTOCOL
 // Queue a MIN frame in the transport queue
 bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t *payload, uint8_t payload_len);
+
+// Determine if MIN has space to queue a transport frame
+bool min_queue_has_space_for_frame(struct min_context *self, uint8_t payload_len);
 #endif
 
 // Send a non-transport frame MIN frame

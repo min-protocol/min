@@ -298,6 +298,11 @@ bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t *payload,
     }
 }
 
+bool min_queue_has_space_for_frame(struct min_context *self, uint8_t payload_len) {
+    return self->transport_fifo.n_frames <= TRANSPORT_FIFO_MAX_FRAMES &&
+           self->transport_fifo.n_ring_buffer_bytes <= TRANSPORT_FIFO_MAX_FRAME_DATA - payload_len;
+}
+
 // Finds the frame in the window that was sent least recently
 static struct transport_frame *find_retransmit_frame(struct min_context *self)
 {
