@@ -170,7 +170,7 @@ static struct transport_frame *transport_fifo_push(struct min_context *self, uin
     // A frame is only queued if there aren't too many frames in the FIFO and there is space in the
     // data ring buffer.
     struct transport_frame *ret = 0;
-    if(self->transport_fifo.n_frames < TRANSPORT_FIFO_MAX_FRAMES) {
+    if (self->transport_fifo.n_frames <= TRANSPORT_FIFO_MAX_FRAMES) {
         // Is there space in the ring buffer for the frame payload?
         if(self->transport_fifo.n_ring_buffer_bytes <= TRANSPORT_FIFO_MAX_FRAME_DATA - data_size) {
             self->transport_fifo.n_frames++;
