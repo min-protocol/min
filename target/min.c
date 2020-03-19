@@ -170,7 +170,7 @@ static struct transport_frame *transport_fifo_push(struct min_context *self, uin
     // A frame is only queued if there aren't too many frames in the FIFO and there is space in the
     // data ring buffer.
     struct transport_frame *ret = 0;
-    if(self->transport_fifo.n_frames < TRANSPORT_FIFO_MAX_FRAMES) {
+    if (self->transport_fifo.n_frames <= TRANSPORT_FIFO_MAX_FRAMES) {
         // Is there space in the ring buffer for the frame payload?
         if(self->transport_fifo.n_ring_buffer_bytes <= TRANSPORT_FIFO_MAX_FRAME_DATA - data_size) {
             self->transport_fifo.n_frames++;
@@ -296,6 +296,11 @@ bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t *payload,
         self->transport_fifo.dropped_frames++;
         return false;
     }
+}
+
+bool min_queue_has_space_for_frame(struct min_context *self, uint8_t payload_len) {
+    return self->transport_fifo.n_frames <= TRANSPORT_FIFO_MAX_FRAMES &&
+           self->transport_fifo.n_ring_buffer_bytes <= TRANSPORT_FIFO_MAX_FRAME_DATA - payload_len;
 }
 
 // Finds the frame in the window that was sent least recently
@@ -575,7 +580,7 @@ void min_poll(struct min_context *self, uint8_t *buf, uint32_t buf_len)
     if((window_size < TRANSPORT_MAX_WINDOW_SIZE) && (self->transport_fifo.n_frames > window_size)) {
         // There are new frames we can send; but don't even bother if there's no buffer space for them
         struct transport_frame *frame = transport_fifo_get(self, window_size);
-        if(ON_WIRE_SIZE(frame->payload_len) < min_tx_space(self->port)) {
+        if(ON_WIRE_SIZE(frame->payload_len) <= min_tx_space(self->port)) {
             frame->seq = self->transport_fifo.sn_max;
             transport_fifo_send(self, frame);
 
