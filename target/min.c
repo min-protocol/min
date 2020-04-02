@@ -261,7 +261,7 @@ static void transport_fifo_reset(struct min_context *self)
 
 void min_transport_reset(struct min_context *self, bool inform_other_side)
 {
-    min_debug_print("Resetting %s other side", inform_other_side ? "and informing" : "without informing");
+    min_debug_print("Resetting %s other side\n", inform_other_side ? "and informing" : "without informing");
     if (inform_other_side) {
         // Tell the other end we have gone away
         send_reset(self);
@@ -392,7 +392,7 @@ static void valid_frame_received(struct min_context *self)
             // sequence numbers, etc.)
             // We don't send anything, we just do it. The other end can send frames to see if this end is
             // alive (pings, etc.) or just wait to get application frames.
-            min_debug_print("Received reset");
+            min_debug_print("Received reset\n");
             self->transport_fifo.resets_received++;
             transport_fifo_reset(self);
             break;
@@ -426,7 +426,7 @@ static void valid_frame_received(struct min_context *self)
                     // retransmitted when our ACK didn't get through in time, or else it's further on in the
                     // sequence and others got dropped.
                     self->transport_fifo.sequence_mismatch_drop++;
-                    min_debug_print("Received mismatched frame seq=%d, looking for seq=%d", seq, self->transport_fifo.rn);
+                    min_debug_print("Received mismatched frame seq=%d, looking for seq=%d\n", seq, self->transport_fifo.rn);
                 }
             }
             else {
@@ -634,7 +634,7 @@ void min_init_context(struct min_context *self, uint8_t port)
     self->transport_fifo.n_frames_max = 0;
     transport_fifo_reset(self);
 #endif // TRANSPORT_PROTOCOL
-    min_debug_print("MIN init complete");
+    min_debug_print("MIN init complete\n");
 }
 
 // Sends an application MIN frame on the wire (do not put into the transport queue)
