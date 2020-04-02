@@ -261,6 +261,7 @@ static void transport_fifo_reset(struct min_context *self)
 
 void min_transport_reset(struct min_context *self, bool inform_other_side)
 {
+    min_debug_print("Resetting %s other side", inform_other_side ? "and informing" : "without informing");
     if (inform_other_side) {
         // Tell the other end we have gone away
         send_reset(self);
@@ -391,6 +392,7 @@ static void valid_frame_received(struct min_context *self)
             // sequence numbers, etc.)
             // We don't send anything, we just do it. The other end can send frames to see if this end is
             // alive (pings, etc.) or just wait to get application frames.
+            min_debug_print("Received reset");
             self->transport_fifo.resets_received++;
             transport_fifo_reset(self);
             break;
@@ -417,17 +419,19 @@ static void valid_frame_received(struct min_context *self)
                     // Now ready to pass this up to the application handlers
 
                     // Pass frame up to application handler to deal with
-                    min_debug_print("Incoming app frame seq=%d, id=%d, payload len=%d\n", seq, id_control & (uint8_t)0x3fU, payload_len);
+                    min_debug_print("Incoming app transport frame seq=%d, id=%d, payload len=%d\n", seq, id_control & (uint8_t)0x3fU, payload_len);
                     min_application_handler(id_control & (uint8_t)0x3fU, payload, payload_len, self->port);
                 } else {
                     // Discard this frame because we aren't looking for it: it's either a dupe because it was
                     // retransmitted when our ACK didn't get through in time, or else it's further on in the
                     // sequence and others got dropped.
                     self->transport_fifo.sequence_mismatch_drop++;
+                    min_debug_print("Received mismatched frame seq=%d, looking for seq=%d", seq, self->transport_fifo.rn);
                 }
             }
             else {
                 // Not a transport frame
+                min_debug_print("Incoming app frame id=%d, payload len=%d\n", id_control & (uint8_t)0x3fU, payload_len);
                 min_application_handler(id_control & (uint8_t)0x3fU, payload, payload_len, self->port);
             }
             break;
@@ -630,6 +634,7 @@ void min_init_context(struct min_context *self, uint8_t port)
     self->transport_fifo.n_frames_max = 0;
     transport_fifo_reset(self);
 #endif // TRANSPORT_PROTOCOL
+    min_debug_print("MIN init complete");
 }
 
 // Sends an application MIN frame on the wire (do not put into the transport queue)
