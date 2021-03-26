@@ -99,7 +99,7 @@ static void stuffed_tx_byte(struct min_context *self, uint8_t byte)
     }
 }
 
-static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t seq, uint8_t *payload_base, uint16_t payload_offset, uint16_t payload_mask, uint8_t payload_len)
+static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t seq, uint8_t const *payload_base, uint16_t payload_offset, uint16_t payload_mask, uint8_t payload_len)
 {
     uint8_t n, i;
     uint32_t checksum;
@@ -273,7 +273,7 @@ void min_transport_reset(struct min_context *self, bool inform_other_side)
 // Queues a MIN ID / payload frame into the outgoing FIFO
 // API call.
 // Returns true if the frame was queued OK.
-bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t *payload, uint8_t payload_len)
+bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, uint8_t payload_len)
 {
     struct transport_frame *frame = transport_fifo_push(self, payload_len); // Claim a FIFO slot, reserve space for payload
 
@@ -561,7 +561,7 @@ static void rx_byte(struct min_context *self, uint8_t byte)
 }
 
 // API call: sends received bytes into a MIN context and runs the transport timeouts
-void min_poll(struct min_context *self, uint8_t *buf, uint32_t buf_len)
+void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len)
 {
     for(uint32_t i = 0; i < buf_len; i++) {
         rx_byte(self, buf[i]);
@@ -633,7 +633,7 @@ void min_init_context(struct min_context *self, uint8_t port)
 }
 
 // Sends an application MIN frame on the wire (do not put into the transport queue)
-void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t *payload, uint8_t payload_len)
+void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, uint8_t payload_len)
 {
     if((ON_WIRE_SIZE(payload_len) <= min_tx_space(self->port))) {
         on_wire_bytes(self, min_id & (uint8_t) 0x3fU, 0, payload, 0, 0xffffU, payload_len);
