@@ -157,25 +157,25 @@ struct min_context {
 
 #ifdef TRANSPORT_PROTOCOL
 // Queue a MIN frame in the transport queue
-bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t *payload, uint8_t payload_len);
+bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, uint8_t payload_len);
 
 // Determine if MIN has space to queue a transport frame
 bool min_queue_has_space_for_frame(struct min_context *self, uint8_t payload_len);
 #endif
 
 // Send a non-transport frame MIN frame
-void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t *payload, uint8_t payload_len);
+void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, uint8_t payload_len);
 
 // Must be regularly called, with the received bytes since the last call.
 // NB: if the transport protocol is being used then even if there are no bytes
 // this call must still be made in order to drive the state machine for retransmits.
-void min_poll(struct min_context *self, uint8_t *buf, uint32_t buf_len);
+void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len);
 
 // Reset the state machine and (optionally) tell the other side that we have done so
 void min_transport_reset(struct min_context *self, bool inform_other_side);
 
 // CALLBACK. Handle incoming MIN frame
-void min_application_handler(uint8_t min_id, uint8_t *min_payload, uint8_t len_payload, uint8_t port);
+void min_application_handler(uint8_t min_id, uint8_t const *min_payload, uint8_t len_payload, uint8_t port);
 
 #ifdef TRANSPORT_PROTOCOL
 // CALLBACK. Must return current time in milliseconds.
