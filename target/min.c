@@ -512,6 +512,7 @@ static void rx_byte(struct min_context *self, uint8_t byte)
                 }
                 else {
                     // Frame dropped because it's longer than any frame we can buffer
+                    min_debug_print("Dropping frame because length %d > MAX_PAYLOAD %d", self->rx_frame_length, MAX_PAYLOAD);
                     self->rx_frame_state = SEARCHING_FOR_SOF;
                 }
             }
@@ -542,6 +543,7 @@ static void rx_byte(struct min_context *self, uint8_t byte)
             self->rx_frame_checksum |= byte;
             crc = crc32_finalize(&self->rx_checksum);
             if(self->rx_frame_checksum != crc) {
+                min_debug_print("Checksum failed, received 0x%08X, computed 0x%08X", self->rx_frame_checksum, crc);
                 // Frame fails the checksum and so is dropped
                 self->rx_frame_state = SEARCHING_FOR_SOF;
             }
@@ -554,13 +556,16 @@ static void rx_byte(struct min_context *self, uint8_t byte)
             if(byte == 0x55u) {
                 // Frame received OK, pass up data to handler
                 valid_frame_received(self);
+            } else {
+                // else discard
+                min_debug_print("Received invalid EOF 0x%02X", byte);
             }
-            // else discard
             // Look for next frame */
             self->rx_frame_state = SEARCHING_FOR_SOF;
             break;
         default:
             // Should never get here but in case we do then reset to a safe state
+            min_debug_print("Received byte 0x%02X in invalid state %d", byte, self->rx_frame_state);
             self->rx_frame_state = SEARCHING_FOR_SOF;
             break;
     }
