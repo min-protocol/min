@@ -81,11 +81,13 @@ static uint32_t crc32_finalize(struct crc32_context *context)
 }
 
 
-static void stuffed_tx_byte(struct min_context *self, uint8_t byte)
+static void stuffed_tx_byte(struct min_context *self, uint8_t byte, bool crc)
 {
     // Transmit the byte
     min_tx_byte(self->port, byte);
-    crc32_step(&self->tx_checksum, byte);
+    if(crc) {
+        crc32_step(&self->tx_checksum, byte);
+    }
 
     // See if an additional stuff byte is needed
     if(byte == HEADER_BYTE) {
@@ -114,16 +116,16 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
     min_tx_byte(self->port, HEADER_BYTE);
     min_tx_byte(self->port, HEADER_BYTE);
 
-    stuffed_tx_byte(self, id_control);
+    stuffed_tx_byte(self, id_control, true);
     if(id_control & 0x80U) {
         // Send the sequence number if it is a transport frame
-        stuffed_tx_byte(self, seq);
+        stuffed_tx_byte(self, seq, true);
     }
 
-    stuffed_tx_byte(self, payload_len);
+    stuffed_tx_byte(self, payload_len, true);
 
     for(i = 0, n = payload_len; n > 0; n--, i++) {
-        stuffed_tx_byte(self, payload_base[payload_offset]);
+        stuffed_tx_byte(self, payload_base[payload_offset], true);
         payload_offset++;
         payload_offset &= payload_mask;
     }
@@ -132,10 +134,10 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
 
     // Network order is big-endian. A decent C compiler will spot that this
     // is extracting bytes and will use efficient instructions.
-    stuffed_tx_byte(self, (uint8_t)((checksum >> 24) & 0xffU));
-    stuffed_tx_byte(self, (uint8_t)((checksum >> 16) & 0xffU));
-    stuffed_tx_byte(self, (uint8_t)((checksum >> 8) & 0xffU));
-    stuffed_tx_byte(self, (uint8_t)((checksum >> 0) & 0xffU));
+    stuffed_tx_byte(self, (uint8_t)((checksum >> 24) & 0xffU), false);
+    stuffed_tx_byte(self, (uint8_t)((checksum >> 16) & 0xffU), false);
+    stuffed_tx_byte(self, (uint8_t)((checksum >> 8) & 0xffU), false);
+    stuffed_tx_byte(self, (uint8_t)((checksum >> 0) & 0xffU), false);
 
     // Ensure end-of-frame doesn't contain 0xaa and confuse search for start-of-frame
     min_tx_byte(self->port, EOF_BYTE);
