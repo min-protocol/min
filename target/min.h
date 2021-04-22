@@ -194,9 +194,15 @@ void min_tx_byte(uint8_t port, uint8_t byte);
 void min_tx_start(uint8_t port);
 void min_tx_finished(uint8_t port);
 
+// define to validate that MAX_PAYLOAD is defined the same value in calling code and min
+#ifdef VALIDATE_MAX_PAYLOAD
+void min_init_context_validate(struct min_context *self, uint8_t port, void * p_rx_frame_checksum);
+#define min_init_context(self, port) min_init_context_validate(self, port, &(self)->rx_frame_checksum)
+#else
 // Initialize a MIN context ready for receiving bytes from a serial link
 // (Can have multiple MIN contexts)
 void min_init_context(struct min_context *self, uint8_t port);
+#endif
 
 #ifdef MIN_DEBUG_PRINTING
 // Debug print

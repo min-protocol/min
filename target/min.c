@@ -624,8 +624,20 @@ void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len)
 #endif // TRANSPORT_PROTOCOL
 }
 
+#ifdef VALIDATE_MAX_PAYLOAD
+void min_init_context_validate(struct min_context *self, uint8_t port, void * p_rx_frame_checksum)
+#else
 void min_init_context(struct min_context *self, uint8_t port)
+#endif
 {
+#ifdef ASSERTION_CHECKING
+    assert(self != 0);
+#ifdef VALIDATE_MAX_PAYLOAD
+    // check the provided buffer is large enough. This could be false if MIN_PAYLOAD is defined differently when
+    // compiling calling code and this code.
+    assert((void *)(self->rx_frame_payload_buf + MAX_PAYLOAD) <= p_rx_frame_checksum);
+#endif
+#endif
     // Initialize context
     self->rx_header_bytes_seen = 0;
     self->rx_frame_state = SEARCHING_FOR_SOF;
