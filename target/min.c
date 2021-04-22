@@ -311,9 +311,9 @@ static struct transport_frame *find_retransmit_frame(struct min_context *self)
 {
     uint8_t window_size = self->transport_fifo.sn_max - self->transport_fifo.sn_min;
 
-#ifdef ASSERTION_CHECKS
+#ifdef ASSERTION_CHECKING
     assert(window_size > 0);
-    assert(window_size <= self->transport_fifo.nframes);
+    assert(window_size <= self->transport_fifo.n_frames);
 #endif
 
     // Start with the head of the queue and call this the oldest
