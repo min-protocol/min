@@ -81,11 +81,13 @@ static uint32_t crc32_finalize(struct crc32_context *context)
 }
 
 
-static void stuffed_tx_byte(struct min_context *self, uint8_t byte)
+static void stuffed_tx_byte(struct min_context *self, uint8_t byte, bool crc)
 {
     // Transmit the byte
     min_tx_byte(self->port, byte);
-    crc32_step(&self->tx_checksum, byte);
+    if(crc) {
+        crc32_step(&self->tx_checksum, byte);
+    }
 
     // See if an additional stuff byte is needed
     if(byte == HEADER_BYTE) {
@@ -114,16 +116,16 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
     min_tx_byte(self->port, HEADER_BYTE);
     min_tx_byte(self->port, HEADER_BYTE);
 
-    stuffed_tx_byte(self, id_control);
+    stuffed_tx_byte(self, id_control, true);
     if(id_control & 0x80U) {
         // Send the sequence number if it is a transport frame
-        stuffed_tx_byte(self, seq);
+        stuffed_tx_byte(self, seq, true);
     }
 
-    stuffed_tx_byte(self, payload_len);
+    stuffed_tx_byte(self, payload_len, true);
 
     for(i = 0, n = payload_len; n > 0; n--, i++) {
-        stuffed_tx_byte(self, payload_base[payload_offset]);
+        stuffed_tx_byte(self, payload_base[payload_offset], true);
         payload_offset++;
         payload_offset &= payload_mask;
     }
@@ -132,10 +134,10 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
 
     // Network order is big-endian. A decent C compiler will spot that this
     // is extracting bytes and will use efficient instructions.
-    stuffed_tx_byte(self, (uint8_t)((checksum >> 24) & 0xffU));
-    stuffed_tx_byte(self, (uint8_t)((checksum >> 16) & 0xffU));
-    stuffed_tx_byte(self, (uint8_t)((checksum >> 8) & 0xffU));
-    stuffed_tx_byte(self, (uint8_t)((checksum >> 0) & 0xffU));
+    stuffed_tx_byte(self, (uint8_t)((checksum >> 24) & 0xffU), false);
+    stuffed_tx_byte(self, (uint8_t)((checksum >> 16) & 0xffU), false);
+    stuffed_tx_byte(self, (uint8_t)((checksum >> 8) & 0xffU), false);
+    stuffed_tx_byte(self, (uint8_t)((checksum >> 0) & 0xffU), false);
 
     // Ensure end-of-frame doesn't contain 0xaa and confuse search for start-of-frame
     min_tx_byte(self->port, EOF_BYTE);
@@ -309,9 +311,9 @@ static struct transport_frame *find_retransmit_frame(struct min_context *self)
 {
     uint8_t window_size = self->transport_fifo.sn_max - self->transport_fifo.sn_min;
 
-#ifdef ASSERTION_CHECKS
+#ifdef ASSERTION_CHECKING
     assert(window_size > 0);
-    assert(window_size <= self->transport_fifo.nframes);
+    assert(window_size <= self->transport_fifo.n_frames);
 #endif
 
     // Start with the head of the queue and call this the oldest
@@ -510,6 +512,7 @@ static void rx_byte(struct min_context *self, uint8_t byte)
                 }
                 else {
                     // Frame dropped because it's longer than any frame we can buffer
+                    min_debug_print("Dropping frame because length %d > MAX_PAYLOAD %d", self->rx_frame_length, MAX_PAYLOAD);
                     self->rx_frame_state = SEARCHING_FOR_SOF;
                 }
             }
@@ -540,6 +543,7 @@ static void rx_byte(struct min_context *self, uint8_t byte)
             self->rx_frame_checksum |= byte;
             crc = crc32_finalize(&self->rx_checksum);
             if(self->rx_frame_checksum != crc) {
+                min_debug_print("Checksum failed, received 0x%08X, computed 0x%08X", self->rx_frame_checksum, crc);
                 // Frame fails the checksum and so is dropped
                 self->rx_frame_state = SEARCHING_FOR_SOF;
             }
@@ -552,13 +556,16 @@ static void rx_byte(struct min_context *self, uint8_t byte)
             if(byte == 0x55u) {
                 // Frame received OK, pass up data to handler
                 valid_frame_received(self);
+            } else {
+                // else discard
+                min_debug_print("Received invalid EOF 0x%02X", byte);
             }
-            // else discard
             // Look for next frame */
             self->rx_frame_state = SEARCHING_FOR_SOF;
             break;
         default:
             // Should never get here but in case we do then reset to a safe state
+            min_debug_print("Received byte 0x%02X in invalid state %d", byte, self->rx_frame_state);
             self->rx_frame_state = SEARCHING_FOR_SOF;
             break;
     }
@@ -617,8 +624,20 @@ void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len)
 #endif // TRANSPORT_PROTOCOL
 }
 
+#ifdef VALIDATE_MAX_PAYLOAD
+void min_init_context_validate(struct min_context *self, uint8_t port, void * p_rx_frame_checksum)
+#else
 void min_init_context(struct min_context *self, uint8_t port)
+#endif
 {
+#ifdef ASSERTION_CHECKING
+    assert(self != 0);
+#ifdef VALIDATE_MAX_PAYLOAD
+    // check the provided buffer is large enough. This could be false if MIN_PAYLOAD is defined differently when
+    // compiling calling code and this code.
+    assert((void *)(self->rx_frame_payload_buf + MAX_PAYLOAD) <= p_rx_frame_checksum);
+#endif
+#endif
     // Initialize context
     self->rx_header_bytes_seen = 0;
     self->rx_frame_state = SEARCHING_FOR_SOF;
