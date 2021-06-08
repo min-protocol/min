@@ -68,8 +68,9 @@ static void crc32_init_context(struct crc32_context *context)
 
 static void crc32_step(struct crc32_context *context, uint8_t byte)
 {
+    uint32_t j;
     context->crc ^= byte;
-    for(uint32_t j = 0; j < 8; j++) {
+    for(j = 0; j < 8; j++) {
         uint32_t mask = (uint32_t) -(context->crc & 1U);
         context->crc = (context->crc >> 1) ^ (0xedb88320U & mask);
     }
@@ -282,12 +283,13 @@ bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t const *pa
 
     // We are just queueing here: the poll() function puts the frame into the window and on to the wire
     if(frame != 0) {
+        uint32_t i;
         // Copy frame details into frame slot, copy payload into ring buffer
         frame->min_id = min_id & (uint8_t)0x3fU;
         frame->payload_len = payload_len;
 
         uint16_t payload_offset = frame->payload_offset;
-        for(uint32_t i = 0; i < payload_len; i++) {
+        for(i = 0; i < payload_len; i++) {
             payloads_ring_buffer[payload_offset] = payload[i];
             payload_offset++;
             payload_offset &= TRANSPORT_FIFO_SIZE_FRAME_DATA_MASK;
@@ -309,6 +311,8 @@ bool min_queue_has_space_for_frame(struct min_context *self, uint8_t payload_len
 // Finds the frame in the window that was sent least recently
 static struct transport_frame *find_retransmit_frame(struct min_context *self)
 {
+    uint8_t idx;
+    uint8_t i;
     uint8_t window_size = self->transport_fifo.sn_max - self->transport_fifo.sn_min;
 
 #ifdef ASSERTION_CHECKING
@@ -320,8 +324,8 @@ static struct transport_frame *find_retransmit_frame(struct min_context *self)
     struct transport_frame *oldest_frame = &self->transport_fifo.frames[self->transport_fifo.head_idx];
     uint32_t oldest_elapsed_time = now - oldest_frame->last_sent_time_ms;
 
-    uint8_t idx = self->transport_fifo.head_idx;
-    for(uint8_t i = 0; i < window_size; i++) {
+    idx = self->transport_fifo.head_idx;
+    for(i = 0; i < window_size; i++) {
         uint32_t elapsed = now - self->transport_fifo.frames[idx].last_sent_time_ms;
         if(elapsed > oldest_elapsed_time) { // Strictly older only; otherwise the earlier frame is deemed the older
             oldest_elapsed_time = elapsed;
@@ -363,6 +367,8 @@ static void valid_frame_received(struct min_context *self)
             num_in_window = self->transport_fifo.sn_max - self->transport_fifo.sn_min;
 
             if(num_acked <= num_in_window) {
+                uint8_t i;
+
                 self->transport_fifo.sn_min = seq;
 #ifdef ASSERTION_CHECKING
                 assert(self->transport_fifo.n_frames >= num_in_window);
@@ -372,12 +378,12 @@ static void valid_frame_received(struct min_context *self)
                 // Now pop off all the frames up to (but not including) rn
                 // The ACK contains Rn; all frames before Rn are ACKed and can be removed from the window
                 min_debug_print("Received ACK seq=%d, num_acked=%d, num_nacked=%d\n", seq, num_acked, num_nacked);
-                for(uint8_t i = 0; i < num_acked; i++) {
+                for(i = 0; i < num_acked; i++) {
                     transport_fifo_pop(self);
                 }
                 uint8_t idx = self->transport_fifo.head_idx;
                 // Now retransmit the number of frames that were requested
-                for(uint8_t i = 0; i < num_nacked; i++) {
+                for(i = 0; i < num_nacked; i++) {
                     struct transport_frame *retransmit_frame = &self->transport_fifo.frames[idx];
                     transport_fifo_send(self, retransmit_frame);
                     idx++;
@@ -574,7 +580,8 @@ static void rx_byte(struct min_context *self, uint8_t byte)
 // API call: sends received bytes into a MIN context and runs the transport timeouts
 void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len)
 {
-    for(uint32_t i = 0; i < buf_len; i++) {
+    uint32_t i;
+    for(i = 0; i < buf_len; i++) {
         rx_byte(self, buf[i]);
     }
 
