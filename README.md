@@ -16,6 +16,10 @@ File structure:
         min.py              MIN 2.0 reference implementation with support for MIN via Pyserial
 	    listen.py           Example program to run on a host and talk to an Arduino board
 
+There is also a Rust implementation of MIN for both host and target:
+
+https://github.com/qianchenzhumeng/min-rs
+
 All software and documentation available under the terms of the MIT License:
 
 	The MIT License (MIT)
