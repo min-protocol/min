@@ -186,6 +186,7 @@ class MINTransport:
         self._last_received_frame_ms = 0
         self._sn_min = 0
         self._sn_max = 0
+        self._rn = 0
 
     def _rx_reset(self):
         self._stashed_rx_dict = {}
