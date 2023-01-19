@@ -86,8 +86,8 @@
 #define TRANSPORT_FIFO_MAX_FRAMES                   (1U << TRANSPORT_FIFO_SIZE_FRAMES_BITS)
 #define TRANSPORT_FIFO_MAX_FRAME_DATA               (1U << TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS)
 
-#if (MAX_PAYLOAD > 255)
-#error "MIN frame payloads can be no bigger than 255 bytes"
+#if (MAX_PAYLOAD > 0x7FFF)
+#error "MIN frame payloads can be no bigger than 32767 (0x7FFF) bytes"
 #endif
 
 // Indices into the frames FIFO are uint8_t and so can't have more than 256 frames in a FIFO
@@ -100,6 +100,12 @@
 #error "Transport FIFO data allocated cannot exceed 64Kbytes"
 #endif
 
+#if (MAX_PAYLOAD > UINT8_MAX)
+typedef uint16_t pl_len_t;
+#else
+typedef uint8_t pl_len_t;
+#endif
+
 struct crc32_context {
     uint32_t crc;
 };
@@ -109,7 +115,7 @@ struct crc32_context {
 struct transport_frame {
     uint32_t last_sent_time_ms;                     // When frame was last sent (used for re-send timeouts)
     uint16_t payload_offset;                        // Where in the ring buffer the payload is
-    uint8_t payload_len;                            // How big the payload is
+    pl_len_t payload_len;                           // How big the payload is
     uint8_t min_id;                                 // ID of frame
     uint8_t seq;                                    // Sequence number of frame
 };
@@ -146,25 +152,25 @@ struct min_context {
     struct crc32_context tx_checksum;               // Calculated checksum for sending frame
     uint8_t rx_header_bytes_seen;                   // Countdown of header bytes to reset state
     uint8_t rx_frame_state;                         // State of receiver
-    uint8_t rx_frame_payload_bytes;                 // Length of payload received so far
+    pl_len_t rx_frame_payload_bytes;                // Length of payload received so far
     uint8_t rx_frame_id_control;                    // ID and control bit of frame being received
     uint8_t rx_frame_seq;                           // Sequence number of frame being received
-    uint8_t rx_frame_length;                        // Length of frame
-    uint8_t rx_control;                             // Control byte
+    pl_len_t rx_frame_length;                       // Remaining length of frame to be received
+    pl_len_t rx_length;                             // Original received length of the payload
     uint8_t tx_header_byte_countdown;               // Count out the header bytes
     uint8_t port;                                   // Number of the port associated with the context
 };
 
 #ifdef TRANSPORT_PROTOCOL
 // Queue a MIN frame in the transport queue
-bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, uint8_t payload_len);
+bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, pl_len_t payload_len);
 
 // Determine if MIN has space to queue a transport frame
-bool min_queue_has_space_for_frame(struct min_context *self, uint8_t payload_len);
+bool min_queue_has_space_for_frame(struct min_context *self, pl_len_t payload_len);
 #endif
 
 // Send a non-transport frame MIN frame
-void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, uint8_t payload_len);
+void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, pl_len_t payload_len);
 
 // Must be regularly called, with the received bytes since the last call.
 // NB: if the transport protocol is being used then even if there are no bytes
@@ -175,7 +181,7 @@ void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len);
 void min_transport_reset(struct min_context *self, bool inform_other_side);
 
 // CALLBACK. Handle incoming MIN frame
-void min_application_handler(uint8_t min_id, uint8_t const *min_payload, uint8_t len_payload, uint8_t port);
+void min_application_handler(uint8_t min_id, uint8_t const *min_payload, pl_len_t len_payload, uint8_t port);
 
 #ifdef TRANSPORT_PROTOCOL
 // CALLBACK. Must return current time in milliseconds.

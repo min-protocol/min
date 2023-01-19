@@ -8,8 +8,8 @@
 #define TRANSPORT_FIFO_SIZE_FRAME_DATA_MASK         ((uint16_t)((1U << TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS) - 1U))
 
 // Number of bytes needed for a frame with a given payload length, excluding stuff bytes
-// 3 header bytes, ID/control byte, length byte, seq byte, 4 byte CRC, EOF byte
-#define ON_WIRE_SIZE(p)                             ((p) + 11U)
+// 3 header bytes, ID/control byte, 1 or 2 length bytes, seq byte, 4 byte CRC, EOF byte
+#define ON_WIRE_SIZE(p)                             ((p) + 4U + sizeof(pl_len_t) + 6U)
 
 // Special protocol bytes
 enum {
@@ -23,7 +23,8 @@ enum {
     SEARCHING_FOR_SOF,
     RECEIVING_ID_CONTROL,
     RECEIVING_SEQ,
-    RECEIVING_LENGTH,
+    RECEIVING_LENGTH_MSB,
+    RECEIVING_LENGTH_LSB,
     RECEIVING_PAYLOAD,
     RECEIVING_CHECKSUM_3,
     RECEIVING_CHECKSUM_2,
@@ -102,9 +103,9 @@ static void stuffed_tx_byte(struct min_context *self, uint8_t byte, bool crc)
     }
 }
 
-static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t seq, uint8_t const *payload_base, uint16_t payload_offset, uint16_t payload_mask, uint8_t payload_len)
+static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t seq, uint8_t const *payload_base, uint16_t payload_offset, uint16_t payload_mask, pl_len_t payload_len)
 {
-    uint8_t n, i;
+    pl_len_t n, i;
     uint32_t checksum;
 
     self->tx_header_byte_countdown = 2U;
@@ -123,7 +124,10 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
         stuffed_tx_byte(self, seq, true);
     }
 
-    stuffed_tx_byte(self, payload_len, true);
+#if (MAX_PAYLOAD > UINT8_MAX)
+    stuffed_tx_byte(self, payload_len >> 8, true);
+#endif
+    stuffed_tx_byte(self, payload_len & 0xFF, true);
 
     for(i = 0, n = payload_len; n > 0; n--, i++) {
         stuffed_tx_byte(self, payload_base[payload_offset], true);
@@ -277,7 +281,7 @@ void min_transport_reset(struct min_context *self, bool inform_other_side)
 // Queues a MIN ID / payload frame into the outgoing FIFO
 // API call.
 // Returns true if the frame was queued OK.
-bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, uint8_t payload_len)
+bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, pl_len_t payload_len)
 {
     struct transport_frame *frame = transport_fifo_push(self, payload_len); // Claim a FIFO slot, reserve space for payload
 
@@ -303,7 +307,7 @@ bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t const *pa
     }
 }
 
-bool min_queue_has_space_for_frame(struct min_context *self, uint8_t payload_len) {
+bool min_queue_has_space_for_frame(struct min_context *self, pl_len_t payload_len) {
     return self->transport_fifo.n_frames < TRANSPORT_FIFO_MAX_FRAMES &&
            self->transport_fifo.n_ring_buffer_bytes <= TRANSPORT_FIFO_MAX_FRAME_DATA - payload_len;
 }
@@ -343,12 +347,12 @@ static struct transport_frame *find_retransmit_frame(struct min_context *self)
 // duplicates received, and handling RESET requests.
 static void valid_frame_received(struct min_context *self)
 {
-    uint8_t id_control = self->rx_frame_id_control;
-    uint8_t *payload = self->rx_frame_payload_buf;
-    uint8_t payload_len = self->rx_control;
+    const uint8_t id_control = self->rx_frame_id_control;
+    const uint8_t * const payload = self->rx_frame_payload_buf;
+    const pl_len_t payload_len = self->rx_length;
 
 #ifdef TRANSPORT_PROTOCOL
-    uint8_t seq = self->rx_frame_seq;
+    const uint8_t seq = self->rx_frame_seq;
     uint8_t num_acked;
     uint8_t num_nacked;
     uint8_t num_in_window;
@@ -499,17 +503,29 @@ static void rx_byte(struct min_context *self, uint8_t byte)
             }
             else {
                 self->rx_frame_seq = 0;
-                self->rx_frame_state = RECEIVING_LENGTH;
+                self->rx_frame_state = RECEIVING_LENGTH_MSB;
             }
             break;
         case RECEIVING_SEQ:
             self->rx_frame_seq = byte;
             crc32_step(&self->rx_checksum, byte);
-            self->rx_frame_state = RECEIVING_LENGTH;
+            self->rx_frame_state = RECEIVING_LENGTH_MSB;
             break;
-        case RECEIVING_LENGTH:
-            self->rx_frame_length = byte;
-            self->rx_control = byte;
+        case RECEIVING_LENGTH_MSB:
+#if (MAX_PAYLOAD > UINT8_MAX)
+            self->rx_frame_length = ((uint16_t)byte) << 8;
+            crc32_step(&self->rx_checksum, byte);
+            self->rx_frame_state = RECEIVING_LENGTH_LSB;
+            break;
+#else
+            // MSB == LSB if value is 8-bit
+            self->rx_frame_length = 0;
+            self->rx_frame_state = RECEIVING_LENGTH_LSB;
+#endif
+            // FALLTHRU
+        case RECEIVING_LENGTH_LSB:
+            self->rx_frame_length |= byte;
+            self->rx_length = self->rx_frame_length;
             crc32_step(&self->rx_checksum, byte);
             if(self->rx_frame_length > 0) {
                 // Can reduce the RAM size by compiling limits to frame sizes
@@ -664,7 +680,7 @@ void min_init_context(struct min_context *self, uint8_t port)
 }
 
 // Sends an application MIN frame on the wire (do not put into the transport queue)
-void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, uint8_t payload_len)
+void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, pl_len_t payload_len)
 {
     if((ON_WIRE_SIZE(payload_len) <= min_tx_space(self->port))) {
         on_wire_bytes(self, min_id & (uint8_t) 0x3fU, 0, payload, 0, 0xffffU, payload_len);
