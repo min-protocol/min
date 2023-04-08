@@ -5,3 +5,8 @@
 *.srec
 *.eep
 *.lss
+.pio
+.pioenvs
+.piolibdeps
+.vscode/
+__pycache__

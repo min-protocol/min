@@ -4,12 +4,12 @@
 
 #include "min.h"
 
-#define TRANSPORT_FIFO_SIZE_FRAMES_MASK             ((uint8_t)((1U << TRANSPORT_FIFO_SIZE_FRAMES_BITS) - 1U))
-#define TRANSPORT_FIFO_SIZE_FRAME_DATA_MASK         ((uint16_t)((1U << TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS) - 1U))
+#define TRANSPORT_FIFO_SIZE_FRAMES_MASK ((uint8_t)((1U << TRANSPORT_FIFO_SIZE_FRAMES_BITS) - 1U))
+#define TRANSPORT_FIFO_SIZE_FRAME_DATA_MASK ((uint16_t)((1U << TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS) - 1U))
 
 // Number of bytes needed for a frame with a given payload length, excluding stuff bytes
 // 3 header bytes, ID/control byte, length byte, seq byte, 4 byte CRC, EOF byte
-#define ON_WIRE_SIZE(p)                             ((p) + 11U)
+#define ON_WIRE_SIZE(p) ((p) + 11U)
 
 // Special protocol bytes
 enum {
@@ -35,16 +35,16 @@ enum {
 #ifdef TRANSPORT_PROTOCOL
 
 #ifndef TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS
-#define TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS         (25U)
+#define TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS (25U)
 #endif
 #ifndef TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS
-#define TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS       (50U) // Should be long enough for a whole window to be transmitted plus an ACK / NACK to get back
+#define TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS (50U) // Should be long enough for a whole window to be transmitted plus an ACK / NACK to get back
 #endif
 #ifndef TRANSPORT_MAX_WINDOW_SIZE
-#define TRANSPORT_MAX_WINDOW_SIZE                   (16U)
+#define TRANSPORT_MAX_WINDOW_SIZE (16U)
 #endif
 #ifndef TRANSPORT_IDLE_TIMEOUT_MS
-#define TRANSPORT_IDLE_TIMEOUT_MS                   (1000U)
+#define TRANSPORT_IDLE_TIMEOUT_MS (1000U)
 #endif
 
 enum {
@@ -70,8 +70,8 @@ static void crc32_step(struct crc32_context *context, uint8_t byte)
 {
     uint32_t j;
     context->crc ^= byte;
-    for(j = 0; j < 8; j++) {
-        uint32_t mask = (uint32_t) -(context->crc & 1U);
+    for (j = 0; j < 8; j++) {
+        uint32_t mask = (uint32_t) - (context->crc & 1U);
         context->crc = (context->crc >> 1) ^ (0xedb88320U & mask);
     }
 }
@@ -81,23 +81,21 @@ static uint32_t crc32_finalize(struct crc32_context *context)
     return ~context->crc;
 }
 
-
 static void stuffed_tx_byte(struct min_context *self, uint8_t byte, bool crc)
 {
     // Transmit the byte
     min_tx_byte(self->port, byte);
-    if(crc) {
+    if (crc) {
         crc32_step(&self->tx_checksum, byte);
     }
 
     // See if an additional stuff byte is needed
-    if(byte == HEADER_BYTE) {
-        if(--self->tx_header_byte_countdown == 0) {
-            min_tx_byte(self->port, STUFF_BYTE);        // Stuff byte
+    if (byte == HEADER_BYTE) {
+        if (--self->tx_header_byte_countdown == 0) {
+            min_tx_byte(self->port, STUFF_BYTE); // Stuff byte
             self->tx_header_byte_countdown = 2U;
         }
-    }
-    else {
+    } else {
         self->tx_header_byte_countdown = 2U;
     }
 }
@@ -118,14 +116,14 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
     min_tx_byte(self->port, HEADER_BYTE);
 
     stuffed_tx_byte(self, id_control, true);
-    if(id_control & 0x80U) {
+    if (id_control & 0x80U) {
         // Send the sequence number if it is a transport frame
         stuffed_tx_byte(self, seq, true);
     }
 
     stuffed_tx_byte(self, payload_len, true);
 
-    for(i = 0, n = payload_len; n > 0; n--, i++) {
+    for (i = 0, n = payload_len; n > 0; n--, i++) {
         stuffed_tx_byte(self, payload_base[payload_offset], true);
         payload_offset++;
         payload_offset &= payload_mask;
@@ -175,7 +173,7 @@ static struct transport_frame *transport_fifo_push(struct min_context *self, uin
     struct transport_frame *ret = 0;
     if (self->transport_fifo.n_frames < TRANSPORT_FIFO_MAX_FRAMES) {
         // Is there space in the ring buffer for the frame payload?
-        if(self->transport_fifo.n_ring_buffer_bytes <= TRANSPORT_FIFO_MAX_FRAME_DATA - data_size) {
+        if (self->transport_fifo.n_ring_buffer_bytes <= TRANSPORT_FIFO_MAX_FRAME_DATA - data_size) {
             self->transport_fifo.n_frames++;
             if (self->transport_fifo.n_frames > self->transport_fifo.n_frames_max) {
                 // High-water mark of FIFO (for diagnostic purposes)
@@ -187,7 +185,7 @@ static struct transport_frame *transport_fifo_push(struct min_context *self, uin
 
             // Claim ring buffer space
             self->transport_fifo.n_ring_buffer_bytes += data_size;
-            if(self->transport_fifo.n_ring_buffer_bytes > self->transport_fifo.n_ring_buffer_bytes_max) {
+            if (self->transport_fifo.n_ring_buffer_bytes > self->transport_fifo.n_ring_buffer_bytes_max) {
                 // High-water mark of ring buffer usage (for diagnostic purposes)
                 self->transport_fifo.n_ring_buffer_bytes_max = self->transport_fifo.n_ring_buffer_bytes;
             }
@@ -197,12 +195,10 @@ static struct transport_frame *transport_fifo_push(struct min_context *self, uin
             // Claim FIFO space
             self->transport_fifo.tail_idx++;
             self->transport_fifo.tail_idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
-        }
-        else {
+        } else {
             min_debug_print("No FIFO payload space: data_size=%d, n_ring_buffer_bytes=%d\n", data_size, self->transport_fifo.n_ring_buffer_bytes);
         }
-    }
-    else {
+    } else {
         min_debug_print("No FIFO frame slots\n");
     }
     return ret;
@@ -229,7 +225,7 @@ static void send_ack(struct min_context *self)
     // In the embedded end we don't reassemble out-of-order frames and so never ask for retransmits. Payload is
     // always the same as the sequence number.
     min_debug_print("send ACK: seq=%d\n", self->transport_fifo.rn);
-    if(ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
+    if (ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
         on_wire_bytes(self, ACK, self->transport_fifo.rn, &self->transport_fifo.rn, 0, 0xffU, 1U);
         self->transport_fifo.last_sent_ack_time_ms = now;
     }
@@ -239,7 +235,7 @@ static void send_ack(struct min_context *self)
 static void send_reset(struct min_context *self)
 {
     min_debug_print("send RESET\n");
-    if(ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
+    if (ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
         on_wire_bytes(self, RESET, 0, 0, 0, 0, 0);
     }
 }
@@ -282,28 +278,28 @@ bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t const *pa
     struct transport_frame *frame = transport_fifo_push(self, payload_len); // Claim a FIFO slot, reserve space for payload
 
     // We are just queueing here: the poll() function puts the frame into the window and on to the wire
-    if(frame != 0) {
+    if (frame != 0) {
         uint32_t i;
         // Copy frame details into frame slot, copy payload into ring buffer
         frame->min_id = min_id & (uint8_t)0x3fU;
         frame->payload_len = payload_len;
 
         uint16_t payload_offset = frame->payload_offset;
-        for(i = 0; i < payload_len; i++) {
+        for (i = 0; i < payload_len; i++) {
             payloads_ring_buffer[payload_offset] = payload[i];
             payload_offset++;
             payload_offset &= TRANSPORT_FIFO_SIZE_FRAME_DATA_MASK;
         }
         min_debug_print("Queued ID=%d, len=%d\n", min_id, payload_len);
         return true;
-    }
-    else {
+    } else {
         self->transport_fifo.dropped_frames++;
         return false;
     }
 }
 
-bool min_queue_has_space_for_frame(struct min_context *self, uint8_t payload_len) {
+bool min_queue_has_space_for_frame(struct min_context *self, uint8_t payload_len)
+{
     return self->transport_fifo.n_frames < TRANSPORT_FIFO_MAX_FRAMES &&
            self->transport_fifo.n_ring_buffer_bytes <= TRANSPORT_FIFO_MAX_FRAME_DATA - payload_len;
 }
@@ -325,9 +321,9 @@ static struct transport_frame *find_retransmit_frame(struct min_context *self)
     uint32_t oldest_elapsed_time = now - oldest_frame->last_sent_time_ms;
 
     idx = self->transport_fifo.head_idx;
-    for(i = 0; i < window_size; i++) {
+    for (i = 0; i < window_size; i++) {
         uint32_t elapsed = now - self->transport_fifo.frames[idx].last_sent_time_ms;
-        if(elapsed > oldest_elapsed_time) { // Strictly older only; otherwise the earlier frame is deemed the older
+        if (elapsed > oldest_elapsed_time) { // Strictly older only; otherwise the earlier frame is deemed the older
             oldest_elapsed_time = elapsed;
             oldest_frame = &self->transport_fifo.frames[idx];
         }
@@ -356,95 +352,93 @@ static void valid_frame_received(struct min_context *self)
     // When we receive anything we know the other end is still active and won't shut down
     self->transport_fifo.last_received_anything_ms = now;
 
-    switch(id_control) {
-        case ACK:
-            // If we get an ACK then we remove all the acknowledged frames with seq < rn
-            // The payload byte specifies the number of NACKed frames: how many we want retransmitted because
-            // they have gone missing.
-            // But we need to make sure we don't accidentally ACK too many because of a stale ACK from an old session
-            num_acked = seq - self->transport_fifo.sn_min;
-            num_nacked = payload[0] - seq;
-            num_in_window = self->transport_fifo.sn_max - self->transport_fifo.sn_min;
+    switch (id_control) {
+    case ACK:
+        // If we get an ACK then we remove all the acknowledged frames with seq < rn
+        // The payload byte specifies the number of NACKed frames: how many we want retransmitted because
+        // they have gone missing.
+        // But we need to make sure we don't accidentally ACK too many because of a stale ACK from an old session
+        num_acked = seq - self->transport_fifo.sn_min;
+        num_nacked = payload[0] - seq;
+        num_in_window = self->transport_fifo.sn_max - self->transport_fifo.sn_min;
 
-            if(num_acked <= num_in_window) {
-                uint8_t i;
+        if (num_acked <= num_in_window) {
+            uint8_t i;
 
-                self->transport_fifo.sn_min = seq;
+            self->transport_fifo.sn_min = seq;
 #ifdef ASSERTION_CHECKING
-                assert(self->transport_fifo.n_frames >= num_in_window);
-                assert(num_in_window <= TRANSPORT_MAX_WINDOW_SIZE);
-                assert(num_nacked <= TRANSPORT_MAX_WINDOW_SIZE);
+            assert(self->transport_fifo.n_frames >= num_in_window);
+            assert(num_in_window <= TRANSPORT_MAX_WINDOW_SIZE);
+            assert(num_nacked <= TRANSPORT_MAX_WINDOW_SIZE);
 #endif
-                // Now pop off all the frames up to (but not including) rn
-                // The ACK contains Rn; all frames before Rn are ACKed and can be removed from the window
-                min_debug_print("Received ACK seq=%d, num_acked=%d, num_nacked=%d\n", seq, num_acked, num_nacked);
-                for(i = 0; i < num_acked; i++) {
-                    transport_fifo_pop(self);
-                }
-                uint8_t idx = self->transport_fifo.head_idx;
-                // Now retransmit the number of frames that were requested
-                for(i = 0; i < num_nacked; i++) {
-                    struct transport_frame *retransmit_frame = &self->transport_fifo.frames[idx];
-                    transport_fifo_send(self, retransmit_frame);
-                    idx++;
-                    idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
-                }
+            // Now pop off all the frames up to (but not including) rn
+            // The ACK contains Rn; all frames before Rn are ACKed and can be removed from the window
+            min_debug_print("Received ACK seq=%d, num_acked=%d, num_nacked=%d\n", seq, num_acked, num_nacked);
+            for (i = 0; i < num_acked; i++) {
+                transport_fifo_pop(self);
             }
-            else {
-                min_debug_print("Received spurious ACK seq=%d\n", seq);
-                self->transport_fifo.spurious_acks++;
+            uint8_t idx = self->transport_fifo.head_idx;
+            // Now retransmit the number of frames that were requested
+            for (i = 0; i < num_nacked; i++) {
+                struct transport_frame *retransmit_frame = &self->transport_fifo.frames[idx];
+                transport_fifo_send(self, retransmit_frame);
+                idx++;
+                idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
             }
-            break;
-        case RESET:
-            // If we get a RESET demand then we reset the transport protocol (empty the FIFO, reset the
-            // sequence numbers, etc.)
-            // We don't send anything, we just do it. The other end can send frames to see if this end is
-            // alive (pings, etc.) or just wait to get application frames.
-            min_debug_print("Received reset\n");
-            self->transport_fifo.resets_received++;
-            transport_fifo_reset(self);
-            break;
-        default:
-            if (id_control & 0x80U) {
-                // Incoming application frames
+        } else {
+            min_debug_print("Received spurious ACK seq=%d\n", seq);
+            self->transport_fifo.spurious_acks++;
+        }
+        break;
+    case RESET:
+        // If we get a RESET demand then we reset the transport protocol (empty the FIFO, reset the
+        // sequence numbers, etc.)
+        // We don't send anything, we just do it. The other end can send frames to see if this end is
+        // alive (pings, etc.) or just wait to get application frames.
+        min_debug_print("Received reset\n");
+        self->transport_fifo.resets_received++;
+        transport_fifo_reset(self);
+        break;
+    default:
+        if (id_control & 0x80U) {
+            // Incoming application frames
 
-                // Reset the activity time (an idle connection will be stalled)
-                self->transport_fifo.last_received_frame_ms = now;
+            // Reset the activity time (an idle connection will be stalled)
+            self->transport_fifo.last_received_frame_ms = now;
 
-                if (seq == self->transport_fifo.rn) {
-                    // Accept this frame as matching the sequence number we were looking for
+            if (seq == self->transport_fifo.rn) {
+                // Accept this frame as matching the sequence number we were looking for
 
-                    // Now looking for the next one in the sequence
-                    self->transport_fifo.rn++;
+                // Now looking for the next one in the sequence
+                self->transport_fifo.rn++;
 
-                    // Always send an ACK back for the frame we received
-                    // ACKs are short (should be about 9 microseconds to send on the wire) and
-                    // this will cut the latency down.
-                    // We also periodically send an ACK in case the ACK was lost, and in any case
-                    // frames are re-sent.
-                    send_ack(self);
+                // Always send an ACK back for the frame we received
+                // ACKs are short (should be about 9 microseconds to send on the wire) and
+                // this will cut the latency down.
+                // We also periodically send an ACK in case the ACK was lost, and in any case
+                // frames are re-sent.
+                send_ack(self);
 
-                    // Now ready to pass this up to the application handlers
+                // Now ready to pass this up to the application handlers
 
-                    // Pass frame up to application handler to deal with
-                    min_debug_print("Incoming app transport frame seq=%d, id=%d, payload len=%d\n", seq, id_control & (uint8_t)0x3fU, payload_len);
-                    min_application_handler(id_control & (uint8_t)0x3fU, payload, payload_len, self->port);
-                } else {
-                    // Discard this frame because we aren't looking for it: it's either a dupe because it was
-                    // retransmitted when our ACK didn't get through in time, or else it's further on in the
-                    // sequence and others got dropped.
-                    self->transport_fifo.sequence_mismatch_drop++;
-                    min_debug_print("Received mismatched frame seq=%d, looking for seq=%d\n", seq, self->transport_fifo.rn);
-                }
-            }
-            else {
-                // Not a transport frame
-                min_debug_print("Incoming app frame id=%d, payload len=%d\n", id_control & (uint8_t)0x3fU, payload_len);
+                // Pass frame up to application handler to deal with
+                min_debug_print("Incoming app transport frame seq=%d, id=%d, payload len=%d\n", seq, id_control & (uint8_t)0x3fU, payload_len);
                 min_application_handler(id_control & (uint8_t)0x3fU, payload, payload_len, self->port);
+            } else {
+                // Discard this frame because we aren't looking for it: it's either a dupe because it was
+                // retransmitted when our ACK didn't get through in time, or else it's further on in the
+                // sequence and others got dropped.
+                self->transport_fifo.sequence_mismatch_drop++;
+                min_debug_print("Received mismatched frame seq=%d, looking for seq=%d\n", seq, self->transport_fifo.rn);
             }
-            break;
+        } else {
+            // Not a transport frame
+            min_debug_print("Incoming app frame id=%d, payload len=%d\n", id_control & (uint8_t)0x3fU, payload_len);
+            min_application_handler(id_control & (uint8_t)0x3fU, payload, payload_len, self->port);
+        }
+        break;
     }
-#else // TRANSPORT_PROTOCOL
+#else  // TRANSPORT_PROTOCOL
     min_application_handler(id_control & (uint8_t)0x3fU, payload, payload_len, self->port);
 #endif // TRANSPORT_PROTOCOL
 }
@@ -457,123 +451,117 @@ static void rx_byte(struct min_context *self, uint8_t byte)
     // Two in a row in over the frame means to expect a stuff byte.
     uint32_t crc;
 
-    if(self->rx_header_bytes_seen == 2) {
+    if (self->rx_header_bytes_seen == 2) {
         self->rx_header_bytes_seen = 0;
-        if(byte == HEADER_BYTE) {
+        if (byte == HEADER_BYTE) {
             self->rx_frame_state = RECEIVING_ID_CONTROL;
             return;
         }
-        if(byte == STUFF_BYTE) {
+        if (byte == STUFF_BYTE) {
             /* Discard this byte; carry on receiving on the next character */
             return;
-        }
-        else {
+        } else {
             /* Something has gone wrong, give up on this frame and look for header again */
             self->rx_frame_state = SEARCHING_FOR_SOF;
             return;
         }
     }
 
-    if(byte == HEADER_BYTE) {
+    if (byte == HEADER_BYTE) {
         self->rx_header_bytes_seen++;
-    }
-    else {
+    } else {
         self->rx_header_bytes_seen = 0;
     }
 
-    switch(self->rx_frame_state) {
-        case SEARCHING_FOR_SOF:
-            break;
-        case RECEIVING_ID_CONTROL:
-            self->rx_frame_id_control = byte;
-            self->rx_frame_payload_bytes = 0;
-            crc32_init_context(&self->rx_checksum);
-            crc32_step(&self->rx_checksum, byte);
-            if(byte & 0x80U) {
+    switch (self->rx_frame_state) {
+    case SEARCHING_FOR_SOF:
+        break;
+    case RECEIVING_ID_CONTROL:
+        self->rx_frame_id_control = byte;
+        self->rx_frame_payload_bytes = 0;
+        crc32_init_context(&self->rx_checksum);
+        crc32_step(&self->rx_checksum, byte);
+        if (byte & 0x80U) {
 #ifdef TRANSPORT_PROTOCOL
-                self->rx_frame_state = RECEIVING_SEQ;
+            self->rx_frame_state = RECEIVING_SEQ;
 #else
-                // If there is no transport support compiled in then all transport frames are ignored
-                self->rx_frame_state = SEARCHING_FOR_SOF;
+            // If there is no transport support compiled in then all transport frames are ignored
+            self->rx_frame_state = SEARCHING_FOR_SOF;
 #endif // TRANSPORT_PROTOCOL
-            }
-            else {
-                self->rx_frame_seq = 0;
-                self->rx_frame_state = RECEIVING_LENGTH;
-            }
-            break;
-        case RECEIVING_SEQ:
-            self->rx_frame_seq = byte;
-            crc32_step(&self->rx_checksum, byte);
+        } else {
+            self->rx_frame_seq = 0;
             self->rx_frame_state = RECEIVING_LENGTH;
-            break;
-        case RECEIVING_LENGTH:
-            self->rx_frame_length = byte;
-            self->rx_control = byte;
-            crc32_step(&self->rx_checksum, byte);
-            if(self->rx_frame_length > 0) {
-                // Can reduce the RAM size by compiling limits to frame sizes
-                if(self->rx_frame_length <= MAX_PAYLOAD) {
-                    self->rx_frame_state = RECEIVING_PAYLOAD;
-                }
-                else {
-                    // Frame dropped because it's longer than any frame we can buffer
-                    min_debug_print("Dropping frame because length %d > MAX_PAYLOAD %d", self->rx_frame_length, MAX_PAYLOAD);
-                    self->rx_frame_state = SEARCHING_FOR_SOF;
-                }
-            }
-            else {
-                self->rx_frame_state = RECEIVING_CHECKSUM_3;
-            }
-            break;
-        case RECEIVING_PAYLOAD:
-            self->rx_frame_payload_buf[self->rx_frame_payload_bytes++] = byte;
-            crc32_step(&self->rx_checksum, byte);
-            if(--self->rx_frame_length == 0) {
-                self->rx_frame_state = RECEIVING_CHECKSUM_3;
-            }
-            break;
-        case RECEIVING_CHECKSUM_3:
-            self->rx_frame_checksum = ((uint32_t)byte) << 24;
-            self->rx_frame_state = RECEIVING_CHECKSUM_2;
-            break;
-        case RECEIVING_CHECKSUM_2:
-            self->rx_frame_checksum |= ((uint32_t)byte) << 16;
-            self->rx_frame_state = RECEIVING_CHECKSUM_1;
-            break;
-        case RECEIVING_CHECKSUM_1:
-            self->rx_frame_checksum |= ((uint32_t)byte) << 8;
-            self->rx_frame_state = RECEIVING_CHECKSUM_0;
-            break;
-        case RECEIVING_CHECKSUM_0:
-            self->rx_frame_checksum |= byte;
-            crc = crc32_finalize(&self->rx_checksum);
-            if(self->rx_frame_checksum != crc) {
-                min_debug_print("Checksum failed, received 0x%08X, computed 0x%08X", self->rx_frame_checksum, crc);
-                // Frame fails the checksum and so is dropped
+        }
+        break;
+    case RECEIVING_SEQ:
+        self->rx_frame_seq = byte;
+        crc32_step(&self->rx_checksum, byte);
+        self->rx_frame_state = RECEIVING_LENGTH;
+        break;
+    case RECEIVING_LENGTH:
+        self->rx_frame_length = byte;
+        self->rx_control = byte;
+        crc32_step(&self->rx_checksum, byte);
+        if (self->rx_frame_length > 0) {
+            // Can reduce the RAM size by compiling limits to frame sizes
+            if (self->rx_frame_length <= MAX_PAYLOAD) {
+                self->rx_frame_state = RECEIVING_PAYLOAD;
+            } else {
+                // Frame dropped because it's longer than any frame we can buffer
+                min_debug_print("Dropping frame because length %d > MAX_PAYLOAD %d", self->rx_frame_length, MAX_PAYLOAD);
                 self->rx_frame_state = SEARCHING_FOR_SOF;
             }
-            else {
-                // Checksum passes, go on to check for the end-of-frame marker
-                self->rx_frame_state = RECEIVING_EOF;
-            }
-            break;
-        case RECEIVING_EOF:
-            if(byte == 0x55u) {
-                // Frame received OK, pass up data to handler
-                valid_frame_received(self);
-            } else {
-                // else discard
-                min_debug_print("Received invalid EOF 0x%02X", byte);
-            }
-            // Look for next frame */
+        } else {
+            self->rx_frame_state = RECEIVING_CHECKSUM_3;
+        }
+        break;
+    case RECEIVING_PAYLOAD:
+        self->rx_frame_payload_buf[self->rx_frame_payload_bytes++] = byte;
+        crc32_step(&self->rx_checksum, byte);
+        if (--self->rx_frame_length == 0) {
+            self->rx_frame_state = RECEIVING_CHECKSUM_3;
+        }
+        break;
+    case RECEIVING_CHECKSUM_3:
+        self->rx_frame_checksum = ((uint32_t)byte) << 24;
+        self->rx_frame_state = RECEIVING_CHECKSUM_2;
+        break;
+    case RECEIVING_CHECKSUM_2:
+        self->rx_frame_checksum |= ((uint32_t)byte) << 16;
+        self->rx_frame_state = RECEIVING_CHECKSUM_1;
+        break;
+    case RECEIVING_CHECKSUM_1:
+        self->rx_frame_checksum |= ((uint32_t)byte) << 8;
+        self->rx_frame_state = RECEIVING_CHECKSUM_0;
+        break;
+    case RECEIVING_CHECKSUM_0:
+        self->rx_frame_checksum |= byte;
+        crc = crc32_finalize(&self->rx_checksum);
+        if (self->rx_frame_checksum != crc) {
+            min_debug_print("Checksum failed, received 0x%08X, computed 0x%08X", self->rx_frame_checksum, crc);
+            // Frame fails the checksum and so is dropped
             self->rx_frame_state = SEARCHING_FOR_SOF;
-            break;
-        default:
-            // Should never get here but in case we do then reset to a safe state
-            min_debug_print("Received byte 0x%02X in invalid state %d", byte, self->rx_frame_state);
-            self->rx_frame_state = SEARCHING_FOR_SOF;
-            break;
+        } else {
+            // Checksum passes, go on to check for the end-of-frame marker
+            self->rx_frame_state = RECEIVING_EOF;
+        }
+        break;
+    case RECEIVING_EOF:
+        if (byte == 0x55u) {
+            // Frame received OK, pass up data to handler
+            valid_frame_received(self);
+        } else {
+            // else discard
+            min_debug_print("Received invalid EOF 0x%02X", byte);
+        }
+        // Look for next frame */
+        self->rx_frame_state = SEARCHING_FOR_SOF;
+        break;
+    default:
+        // Should never get here but in case we do then reset to a safe state
+        min_debug_print("Received byte 0x%02X in invalid state %d", byte, self->rx_frame_state);
+        self->rx_frame_state = SEARCHING_FOR_SOF;
+        break;
     }
 }
 
@@ -581,7 +569,7 @@ static void rx_byte(struct min_context *self, uint8_t byte)
 void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len)
 {
     uint32_t i;
-    for(i = 0; i < buf_len; i++) {
+    for (i = 0; i < buf_len; i++) {
         rx_byte(self, buf[i]);
     }
 
@@ -595,25 +583,24 @@ void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len)
 
     // This sends one new frame or resends one old frame
     window_size = self->transport_fifo.sn_max - self->transport_fifo.sn_min; // Window size
-    if((window_size < TRANSPORT_MAX_WINDOW_SIZE) && (self->transport_fifo.n_frames > window_size)) {
+    if ((window_size < TRANSPORT_MAX_WINDOW_SIZE) && (self->transport_fifo.n_frames > window_size)) {
         // There are new frames we can send; but don't even bother if there's no buffer space for them
         struct transport_frame *frame = transport_fifo_get(self, window_size);
-        if(ON_WIRE_SIZE(frame->payload_len) <= min_tx_space(self->port)) {
+        if (ON_WIRE_SIZE(frame->payload_len) <= min_tx_space(self->port)) {
             frame->seq = self->transport_fifo.sn_max;
             transport_fifo_send(self, frame);
 
             // Move window on
             self->transport_fifo.sn_max++;
         }
-    }
-    else {
+    } else {
         // Sender cannot send new frames so resend old ones (if there's anyone there)
-        if((window_size > 0) && remote_connected) {
+        if ((window_size > 0) && remote_connected) {
             // There are unacknowledged frames. Can re-send an old frame. Pick the least recently sent one.
             struct transport_frame *oldest_frame = find_retransmit_frame(self);
-            if(now - oldest_frame->last_sent_time_ms >= TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS) {
+            if (now - oldest_frame->last_sent_time_ms >= TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS) {
                 // Resending oldest frame if there's a chance there's enough space to send it
-                if(ON_WIRE_SIZE(oldest_frame->payload_len) <= min_tx_space(self->port)) {
+                if (ON_WIRE_SIZE(oldest_frame->payload_len) <= min_tx_space(self->port)) {
                     transport_fifo_send(self, oldest_frame);
                 }
             }
@@ -622,8 +609,8 @@ void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len)
 
 #ifndef DISABLE_TRANSPORT_ACK_RETRANSMIT
     // Periodically transmit the ACK with the rn value, unless the line has gone idle
-    if(now - self->transport_fifo.last_sent_ack_time_ms > TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS) {
-        if(remote_active) {
+    if (now - self->transport_fifo.last_sent_ack_time_ms > TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS) {
+        if (remote_active) {
             send_ack(self);
         }
     }
@@ -632,7 +619,7 @@ void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len)
 }
 
 #ifdef VALIDATE_MAX_PAYLOAD
-void min_init_context_validate(struct min_context *self, uint8_t port, void * p_rx_frame_checksum)
+void min_init_context_validate(struct min_context *self, uint8_t port, void *p_rx_frame_checksum)
 #else
 void min_init_context(struct min_context *self, uint8_t port)
 #endif
@@ -666,7 +653,7 @@ void min_init_context(struct min_context *self, uint8_t port)
 // Sends an application MIN frame on the wire (do not put into the transport queue)
 void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, uint8_t payload_len)
 {
-    if((ON_WIRE_SIZE(payload_len) <= min_tx_space(self->port))) {
-        on_wire_bytes(self, min_id & (uint8_t) 0x3fU, 0, payload, 0, 0xffffU, payload_len);
+    if ((ON_WIRE_SIZE(payload_len) <= min_tx_space(self->port))) {
+        on_wire_bytes(self, min_id & (uint8_t)0x3fU, 0, payload, 0, 0xffffU, payload_len);
     }
 }

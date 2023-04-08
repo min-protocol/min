@@ -56,12 +56,11 @@
 //    This is called to obtain current time in milliseconds. This is used by the MIN transport protocol to drive
 //    timeouts and retransmits.
 
-
 #ifndef MIN_H
 #define MIN_H
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef ASSERTION_CHECKING
 #include <assert.h>
@@ -72,19 +71,19 @@
 #endif
 
 #ifndef MAX_PAYLOAD
-#define MAX_PAYLOAD                                 (255U)
+#define MAX_PAYLOAD (255U)
 #endif
 
 // Powers of two for FIFO management. Default is 16 frames in the FIFO, total of 1024 bytes for frame data
 #ifndef TRANSPORT_FIFO_SIZE_FRAMES_BITS
-#define TRANSPORT_FIFO_SIZE_FRAMES_BITS             (4U)
+#define TRANSPORT_FIFO_SIZE_FRAMES_BITS (4U)
 #endif
 #ifndef TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS
-#define TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS         (10U)
+#define TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS (10U)
 #endif
 
-#define TRANSPORT_FIFO_MAX_FRAMES                   (1U << TRANSPORT_FIFO_SIZE_FRAMES_BITS)
-#define TRANSPORT_FIFO_MAX_FRAME_DATA               (1U << TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS)
+#define TRANSPORT_FIFO_MAX_FRAMES (1U << TRANSPORT_FIFO_SIZE_FRAMES_BITS)
+#define TRANSPORT_FIFO_MAX_FRAME_DATA (1U << TRANSPORT_FIFO_SIZE_FRAME_DATA_BITS)
 
 #if (MAX_PAYLOAD > 255)
 #error "MIN frame payloads can be no bigger than 255 bytes"
@@ -100,6 +99,10 @@
 #error "Transport FIFO data allocated cannot exceed 64Kbytes"
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct crc32_context {
     uint32_t crc;
 };
@@ -107,11 +110,11 @@ struct crc32_context {
 #ifdef TRANSPORT_PROTOCOL
 
 struct transport_frame {
-    uint32_t last_sent_time_ms;                     // When frame was last sent (used for re-send timeouts)
-    uint16_t payload_offset;                        // Where in the ring buffer the payload is
-    uint8_t payload_len;                            // How big the payload is
-    uint8_t min_id;                                 // ID of frame
-    uint8_t seq;                                    // Sequence number of frame
+    uint32_t last_sent_time_ms; // When frame was last sent (used for re-send timeouts)
+    uint16_t payload_offset;    // Where in the ring buffer the payload is
+    uint8_t payload_len;        // How big the payload is
+    uint8_t min_id;             // ID of frame
+    uint8_t seq;                // Sequence number of frame
 };
 
 struct transport_fifo {
@@ -119,18 +122,18 @@ struct transport_fifo {
     uint32_t last_sent_ack_time_ms;
     uint32_t last_received_anything_ms;
     uint32_t last_received_frame_ms;
-    uint32_t dropped_frames;                        // Diagnostic counters
+    uint32_t dropped_frames; // Diagnostic counters
     uint32_t spurious_acks;
     uint32_t sequence_mismatch_drop;
     uint32_t resets_received;
-    uint16_t n_ring_buffer_bytes;                   // Number of bytes used in the payload ring buffer
-    uint16_t n_ring_buffer_bytes_max;               // Largest number of bytes ever used
-    uint16_t ring_buffer_tail_offset;               // Tail of the payload ring buffer
-    uint8_t n_frames;                               // Number of frames in the FIFO
-    uint8_t n_frames_max;                           // Larger number of frames in the FIFO
-    uint8_t head_idx;                               // Where frames are taken from in the FIFO
-    uint8_t tail_idx;                               // Where new frames are added
-    uint8_t sn_min;                                 // Sequence numbers for transport protocol
+    uint16_t n_ring_buffer_bytes;     // Number of bytes used in the payload ring buffer
+    uint16_t n_ring_buffer_bytes_max; // Largest number of bytes ever used
+    uint16_t ring_buffer_tail_offset; // Tail of the payload ring buffer
+    uint8_t n_frames;                 // Number of frames in the FIFO
+    uint8_t n_frames_max;             // Larger number of frames in the FIFO
+    uint8_t head_idx;                 // Where frames are taken from in the FIFO
+    uint8_t tail_idx;                 // Where new frames are added
+    uint8_t sn_min;                   // Sequence numbers for transport protocol
     uint8_t sn_max;
     uint8_t rn;
 };
@@ -138,21 +141,21 @@ struct transport_fifo {
 
 struct min_context {
 #ifdef TRANSPORT_PROTOCOL
-    struct transport_fifo transport_fifo;           // T-MIN queue of outgoing frames
+    struct transport_fifo transport_fifo; // T-MIN queue of outgoing frames
 #endif
-    uint8_t rx_frame_payload_buf[MAX_PAYLOAD];      // Payload received so far
-    uint32_t rx_frame_checksum;                     // Checksum received over the wire
-    struct crc32_context rx_checksum;               // Calculated checksum for receiving frame
-    struct crc32_context tx_checksum;               // Calculated checksum for sending frame
-    uint8_t rx_header_bytes_seen;                   // Countdown of header bytes to reset state
-    uint8_t rx_frame_state;                         // State of receiver
-    uint8_t rx_frame_payload_bytes;                 // Length of payload received so far
-    uint8_t rx_frame_id_control;                    // ID and control bit of frame being received
-    uint8_t rx_frame_seq;                           // Sequence number of frame being received
-    uint8_t rx_frame_length;                        // Length of frame
-    uint8_t rx_control;                             // Control byte
-    uint8_t tx_header_byte_countdown;               // Count out the header bytes
-    uint8_t port;                                   // Number of the port associated with the context
+    uint8_t rx_frame_payload_buf[MAX_PAYLOAD]; // Payload received so far
+    uint32_t rx_frame_checksum;                // Checksum received over the wire
+    struct crc32_context rx_checksum;          // Calculated checksum for receiving frame
+    struct crc32_context tx_checksum;          // Calculated checksum for sending frame
+    uint8_t rx_header_bytes_seen;              // Countdown of header bytes to reset state
+    uint8_t rx_frame_state;                    // State of receiver
+    uint8_t rx_frame_payload_bytes;            // Length of payload received so far
+    uint8_t rx_frame_id_control;               // ID and control bit of frame being received
+    uint8_t rx_frame_seq;                      // Sequence number of frame being received
+    uint8_t rx_frame_length;                   // Length of frame
+    uint8_t rx_control;                        // Control byte
+    uint8_t tx_header_byte_countdown;          // Count out the header bytes
+    uint8_t port;                              // Number of the port associated with the context
 };
 
 #ifdef TRANSPORT_PROTOCOL
@@ -196,7 +199,7 @@ void min_tx_finished(uint8_t port);
 
 // define to validate that MAX_PAYLOAD is defined the same value in calling code and min
 #ifdef VALIDATE_MAX_PAYLOAD
-void min_init_context_validate(struct min_context *self, uint8_t port, void * p_rx_frame_checksum);
+void min_init_context_validate(struct min_context *self, uint8_t port, void *p_rx_frame_checksum);
 #define min_init_context(self, port) min_init_context_validate(self, port, &(self)->rx_frame_checksum)
 #else
 // Initialize a MIN context ready for receiving bytes from a serial link
@@ -211,4 +214,8 @@ void min_debug_print(const char *msg, ...);
 #define min_debug_print(...)
 #endif
 
-#endif //MIN_H
+#ifdef __cplusplus
+}
+#endif
+
+#endif // MIN_H
