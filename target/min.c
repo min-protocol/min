@@ -125,7 +125,7 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
 
     stuffed_tx_byte(self, payload_len, true);
 
-    for(i = 0, n = payload_len; n > 0; n--, i++) {
+    for((void)(i = 0), n = payload_len; n > 0; n--, i++) {
         stuffed_tx_byte(self, payload_base[payload_offset], true);
         payload_offset++;
         payload_offset &= payload_mask;
