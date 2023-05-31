@@ -125,7 +125,7 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
 
     stuffed_tx_byte(self, payload_len, true);
 
-    for(i = 0, n = payload_len; n > 0; n--, i++) {
+    for((void)(i = 0), n = payload_len; n > 0; n--, i++) {
         stuffed_tx_byte(self, payload_base[payload_offset], true);
         payload_offset++;
         payload_offset &= payload_mask;
@@ -385,9 +385,15 @@ static void valid_frame_received(struct min_context *self)
                 // Now retransmit the number of frames that were requested
                 for(i = 0; i < num_nacked; i++) {
                     struct transport_frame *retransmit_frame = &self->transport_fifo.frames[idx];
-                    transport_fifo_send(self, retransmit_frame);
-                    idx++;
-                    idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
+                    if(ON_WIRE_SIZE(retransmit_frame->payload_len) <= min_tx_space(self->port)) {
+                        transport_fifo_send(self, retransmit_frame);
+                        idx++;
+                        idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
+                    }
+                    else {
+                        min_debug_print("Not enough space to retransmit frame\n");
+                        break;
+                    }
                 }
             }
             else {
