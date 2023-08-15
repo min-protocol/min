@@ -194,13 +194,13 @@ void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t const *pay
  */
 void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len);
 
-void min_transport_reset(struct min_context *self, bool inform_other_side);
 /**
  * Reset the state machine and (optionally) tell the other side that we have done so
  * @param self the min context
  * @param inform_other_side true if we should send a reset frame to the other side
  * @return false if inform_other_side is true and there is no space to send the reset frame, true otherwise
  */
+bool min_transport_reset(struct min_context *self, bool inform_other_side);
 
 /**
  * CALLBACK. Handle incoming MIN frame
