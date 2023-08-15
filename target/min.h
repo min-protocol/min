@@ -157,50 +157,108 @@ struct min_context {
 
 #ifdef TRANSPORT_PROTOCOL
 // Queue a MIN frame in the transport queue
+/**
+ * Queue a MIN frame in the transport queue
+ * @param self the min context
+ * @param min_id the ID of the frame
+ * @param payload the payload of the frame
+ * @param payload_len the length of the payload
+ * @return true if the frame was queued, false otherwise
+ */
 bool min_queue_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, uint8_t payload_len);
 
-// Determine if MIN has space to queue a transport frame
+/**
+ * Determine if MIN has space to queue a transport frame
+ * @param self the min context
+ * @param payload_len the length of the payload
+ * @return true if there is space, false otherwise
+ */
 bool min_queue_has_space_for_frame(struct min_context *self, uint8_t payload_len);
 #endif
 
-// Send a non-transport frame MIN frame
+/**
+ * Send a MIN frame
+ * @param self the min context
+ * @param min_id the ID of the frame
+ * @param payload the payload of the frame
+ * @param payload_len the length of the payload
+ */
 void min_send_frame(struct min_context *self, uint8_t min_id, uint8_t const *payload, uint8_t payload_len);
 
-// Must be regularly called, with the received bytes since the last call.
-// NB: if the transport protocol is being used then even if there are no bytes
-// this call must still be made in order to drive the state machine for retransmits.
+/**
+ * Process incoming bytes or internal queue
+ * If using transport protocol, must be called regularly to drive the state machine for retransmits, even if there are no received bytes
+ * @param self the min context
+ * @param buf the buffer of bytes to process, or NULL
+ * @param buf_len the length of the buffer, or 0
+ */
 void min_poll(struct min_context *self, uint8_t const *buf, uint32_t buf_len);
 
-// Reset the state machine and (optionally) tell the other side that we have done so
-void min_transport_reset(struct min_context *self, bool inform_other_side);
+/**
+ * Reset the state machine and (optionally) tell the other side that we have done so
+ * @param self the min context
+ * @param inform_other_side true if we should send a reset frame to the other side
+ * @return false if inform_other_side is true and there is no space to send the reset frame, true otherwise
+ */
+bool min_transport_reset(struct min_context *self, bool inform_other_side);
 
-// CALLBACK. Handle incoming MIN frame
+/**
+ * CALLBACK. Handle incoming MIN frame
+ * @param min_id the ID of the frame
+ * @param min_payload the payload of the frame
+ * @param len_payload the length of the payload
+ * @param port the port the frame was received on
+ */
 void min_application_handler(uint8_t min_id, uint8_t const *min_payload, uint8_t len_payload, uint8_t port);
 
 #ifdef TRANSPORT_PROTOCOL
-// CALLBACK. Must return current time in milliseconds.
-// Typically a tick timer interrupt will increment a 32-bit variable every 1ms (e.g. SysTick on Cortex M ARM devices).
+/**
+ * CALLBACK. Must return current time in milliseconds.
+ * @return the current time in milliseconds
+ */
 uint32_t min_time_ms(void);
 #endif
 
-// CALLBACK. Must return current buffer space in the given port. Used to check that a frame can be
-// queued.
+/**
+ * CALLBACK. Must return current buffer space in the given port. Used to check that a frame can be queued.
+ * @param port the port to check
+ * @return the number of bytes of space available. If sufficient space is available, data will be sent on the line.
+ */
 uint16_t min_tx_space(uint8_t port);
 
-// CALLBACK. Send a byte on the given line.
+/**
+ * CALLBACK. Send a byte on the given line.
+ * @param port the port to send the byte on
+ * @param byte the byte to send
+ */
 void min_tx_byte(uint8_t port, uint8_t byte);
 
-// CALLBACK. Indcates when frame transmission is finished; useful for buffering bytes into a single serial call.
+/**
+ * CALLBACK. Indicates when frame transmission is finished; useful for buffering bytes into a single serial call.
+ * @param port the port that is starting sending
+ */
 void min_tx_start(uint8_t port);
+/**
+ * CALLBACK. Indicates when frame transmission is finished; useful for buffering bytes into a single serial call.
+ * @param port the port that has finished sending
+ */
 void min_tx_finished(uint8_t port);
 
 // define to validate that MAX_PAYLOAD is defined the same value in calling code and min
 #ifdef VALIDATE_MAX_PAYLOAD
 void min_init_context_validate(struct min_context *self, uint8_t port, void * p_rx_frame_checksum);
+/**
+ * Initialize a MIN context ready for receiving bytes from a serial link (can have multiple MIN contexts)
+ * @param self the min context
+ * @param port the port number associated with the context
+ */
 #define min_init_context(self, port) min_init_context_validate(self, port, &(self)->rx_frame_checksum)
 #else
-// Initialize a MIN context ready for receiving bytes from a serial link
-// (Can have multiple MIN contexts)
+/**
+ * Initialize a MIN context ready for receiving bytes from a serial link (can have multiple MIN contexts)
+ * @param self the min context
+ * @param port the port number associated with the context
+ */
 void min_init_context(struct min_context *self, uint8_t port);
 #endif
 

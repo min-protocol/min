@@ -58,7 +58,7 @@ enum {
 uint8_t payloads_ring_buffer[TRANSPORT_FIFO_MAX_FRAME_DATA];
 
 static uint32_t now;
-static void send_reset(struct min_context *self);
+static bool send_reset(struct min_context *self);
 #endif
 
 static void crc32_init_context(struct crc32_context *context)
@@ -125,7 +125,7 @@ static void on_wire_bytes(struct min_context *self, uint8_t id_control, uint8_t 
 
     stuffed_tx_byte(self, payload_len, true);
 
-    for(i = 0, n = payload_len; n > 0; n--, i++) {
+    for((void)(i = 0), n = payload_len; n > 0; n--, i++) {
         stuffed_tx_byte(self, payload_base[payload_offset], true);
         payload_offset++;
         payload_offset &= payload_mask;
@@ -236,12 +236,14 @@ static void send_ack(struct min_context *self)
 }
 
 // We don't queue an RESET frame - we send it straight away (if there's space to do so)
-static void send_reset(struct min_context *self)
+static bool send_reset(struct min_context *self)
 {
     min_debug_print("send RESET\n");
     if(ON_WIRE_SIZE(0) <= min_tx_space(self->port)) {
         on_wire_bytes(self, RESET, 0, 0, 0, 0, 0);
+        return true;
     }
+    return false;
 }
 
 static void transport_fifo_reset(struct min_context *self)
@@ -262,16 +264,19 @@ static void transport_fifo_reset(struct min_context *self)
     self->transport_fifo.last_received_frame_ms = 0;
 }
 
-void min_transport_reset(struct min_context *self, bool inform_other_side)
+bool min_transport_reset(struct min_context *self, bool inform_other_side)
 {
     min_debug_print("Resetting %s other side\n", inform_other_side ? "and informing" : "without informing");
     if (inform_other_side) {
         // Tell the other end we have gone away
-        send_reset(self);
+        if(!send_reset(self)) {
+            return false;
+        }
     }
 
     // Throw our frames away
     transport_fifo_reset(self);
+    return true;
 }
 
 // Queues a MIN ID / payload frame into the outgoing FIFO
@@ -385,9 +390,15 @@ static void valid_frame_received(struct min_context *self)
                 // Now retransmit the number of frames that were requested
                 for(i = 0; i < num_nacked; i++) {
                     struct transport_frame *retransmit_frame = &self->transport_fifo.frames[idx];
-                    transport_fifo_send(self, retransmit_frame);
-                    idx++;
-                    idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
+                    if(ON_WIRE_SIZE(retransmit_frame->payload_len) <= min_tx_space(self->port)) {
+                        transport_fifo_send(self, retransmit_frame);
+                        idx++;
+                        idx &= TRANSPORT_FIFO_SIZE_FRAMES_MASK;
+                    }
+                    else {
+                        min_debug_print("Not enough space to retransmit frame\n");
+                        break;
+                    }
                 }
             }
             else {
