@@ -9,16 +9,16 @@ from time import time
 from min import MINTransportSerial, min_logger
 
 
-MIN_PORT = '/dev/tty.usbmodem1421'
+MIN_PORT = "/dev/tty.usbmodem1421"
 
 
 def bytes_to_int32(data: bytes, big_endian=True) -> int:
     if len(data) != 4:
         raise ValueError("int32 shoud be exactly 4 bytes")
     if big_endian:
-        return unpack('>I', data)[0]
+        return unpack(">I", data)[0]
     else:
-        return unpack('<I', data)[0]
+        return unpack("<I", data)[0]
 
 
 def wait_for_frames(min_handler: MINTransportSerial, timeout=3.0):
@@ -35,7 +35,7 @@ def soak_test():
     min_handler = MINTransportSerial(port=MIN_PORT, loglevel=DEBUG)
     min_handler.fake_errors = True
 
-    min_log_handler = FileHandler('min.log')
+    min_log_handler = FileHandler("min.log")
     min_logger.addHandler(min_log_handler)
 
     # Tell the target that we are resetting to start a session
@@ -56,13 +56,15 @@ def soak_test():
             min_ids.append(min_id)
             payloads.append(payload)
             # Send a frame on the serial line
-            print(">>>>>>>>>>>>>>>> Sending ID={} payload len={}".format(min_id, payload_size))
+            print(f">>>>>>>>>>>>>>>> Sending ID={min_id} payload len={payload_size}")
             min_handler.queue_frame(min_id=min_id, payload=payload)
 
         while True:
             # Wait for the frames to come back
             for frame in wait_for_frames(min_handler):
-                print(">>>>>>>>>>>>>>>> Got frame min_id={}, payload len={}".format(frame.min_id, len(frame.payload)))
+                print(
+                    f">>>>>>>>>>>>>>>> Got frame min_id={frame.min_id}, payload len={frame.payload}"
+                )
                 if frame.min_id != min_ids[0]:
                     raise AssertionError("Failed: did not get back the MIN ID we sent")
                 if frame.payload != payloads[0]:

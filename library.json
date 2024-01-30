@@ -1,0 +1,25 @@
+{
+  "name": "min",
+  "version": "2.0.0",
+  "description": "Simple point-to-point frame based protocol designed to connect a microcontroller to a PC (or other microcontroller).",
+  "keywords": "protocol",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/min-protocol/min.git"
+  },
+  "authors": [
+    {
+      "name": "JK Energy Ltd"
+    }
+  ],
+  "license": "MIT",
+  "frameworks": "*",
+  "platforms": "*",
+  "build": {
+    "srcDir": "target",
+    "srcFilter": [
+      "+<*.c>",
+      "+<*.h>"
+    ]
+  }
+}
